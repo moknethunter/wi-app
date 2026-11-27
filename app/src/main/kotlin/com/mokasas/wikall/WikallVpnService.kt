@@ -114,6 +114,15 @@ class WikallVpnService : VpnService() {
                 closeTunnel()
                 controller.overlayAwaitingAddress(request)
             }
+            // A provisioned mobile Node can listen/advertise without a virtual IP.
+            // EasyTier DHCP waits for peers. Do not kill a healthy engine just because
+            // the phone is temporarily alone; do not claim the TUN is ready either.
+            if (mayRemainBootstrapNode(request, snapshot)) {
+                controller.overlayListeningWithoutAddress(request)
+                addressDeadline = 0L
+                scheduleHealth(request, generation, HEALTH_INTERVAL_MS)
+                return
+            }
             if (addressDeadline == 0L) addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
             if (SystemClock.elapsedRealtime() >= addressDeadline) {
                 failRequest(request)

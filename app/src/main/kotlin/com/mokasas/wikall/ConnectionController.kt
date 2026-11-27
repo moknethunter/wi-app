@@ -41,6 +41,7 @@ internal data class SessionState(
     val speaker: Boolean = false,
     val overlayStatus: String = "",
     val overlayHealth: OverlayHealth? = null,
+    val publishedOverlayLinks: Int = 0,
     val ice: String = "",
     val missed: List<IncomingMissed> = emptyList(),
 )
@@ -63,7 +64,9 @@ internal class ConnectionController @Inject constructor(
     private var peerScanTask: Runnable? = null
     private var peerScanPin: String? = null
     private val masterAnnouncements = LocalAnnouncements { LanDiscovery(context) }
-    private val overlayAnnouncement = LocalAnnouncements { LanDiscovery(context, "_wikall-ol._udp.", OVERLAY_PORT, "WiKall") }
+    private val overlayAnnouncement = LocalAnnouncements(onPublishedCount = { count ->
+        if (state.value.publishedOverlayLinks != count) publish(state.value.copy(publishedOverlayLinks = count))
+    }) { LanDiscovery(context, "_wikall-ol._udp.", OVERLAY_PORT, "WiKall") }
     @Volatile private var generation = 0
     private var host: LocalHost? = null
     private var client: LocalClient? = null
@@ -272,6 +275,8 @@ internal class ConnectionController @Inject constructor(
         publish(state.value.copy(mode = Mode.CLIENT, busy = true, address = saved.address, number = saved.activation.number, status = "جارٍ البحث عن الخادم المحلي…"))
         directory.attach(saved.pin, saved.activation.number)
         loadMissed()
+        // Boot our own native listener and publish its candidate independently of directory reachability.
+        syncClientOverlay(saved, null)
         val current = generation
         discovery.find(saved.pin) { address ->
             if (current == generation && attempt == lanAttempt) {
@@ -304,6 +309,7 @@ internal class ConnectionController @Inject constructor(
             peerScanTask = null
             if (sessionGeneration != generation || peerScanPin != pin || overlayRequest?.pin != pin) return@Runnable
             val own = physicalAddresses().toSet()
+            overlayRequest?.let(::refreshOverlayAnnouncements)
             val links = announcementLinks(own)
             if (links.isEmpty()) {
                 schedulePeerScan(pin, PEER_SCAN_INTERVAL_MS)
@@ -321,7 +327,7 @@ internal class ConnectionController @Inject constructor(
                     if (call.id == null && (state.value.mode != Mode.SERVER || onlineChannels.isEmpty())) {
                         refreshOverlay()
                     }
-                    schedulePeerScan(pin, PEER_SCAN_INTERVAL_MS)
+                    schedulePeerScan(pin, if (overlayIp == null) BOOTSTRAP_SCAN_INTERVAL_MS else PEER_SCAN_INTERVAL_MS)
                 }
             }
         }.also { main.postDelayed(it, delay) }
@@ -415,6 +421,12 @@ internal class ConnectionController @Inject constructor(
         overlayIp = null
         runCatching { host?.setOverlayAddress(null) }
         publish(state.value.copy(overlayStatus = "بانتظار تخصيص عنوان النفق المحلي…", overlayHealth = null))
+    }
+
+    internal fun overlayListeningWithoutAddress(request: OverlayRequest) {
+        if (overlayRequest != request || overlayIp != null) return
+        val message = "العقدة المحلية تعمل؛ بانتظار الأقران وتخصيص عنوان النفق."
+        if (state.value.overlayStatus != message) publish(state.value.copy(overlayStatus = message))
     }
 
     internal fun overlayChanged(request: OverlayRequest, address: String?) {
@@ -988,14 +1000,14 @@ internal class ConnectionController @Inject constructor(
         topology = currentTopology()
         monitoring = true
         runCatching { networkMonitor.start(::scheduleNetworkCheck) }
-        if (serveHotspot) scheduleHotspotCheck()
+        scheduleHotspotCheck()
     }
 
     // Some hotspot interfaces are not reported through ConnectivityManager.
     private fun scheduleHotspotCheck() {
         hotspotPoll?.let(main::removeCallbacks)
         hotspotPoll = Runnable {
-            if (monitoring && state.value.mode == Mode.SERVER) {
+            if (monitoring) {
                 if (currentTopology() != topology) scheduleNetworkCheck()
                 scheduleHotspotCheck()
             } else hotspotPoll = null
@@ -1099,6 +1111,7 @@ internal class ConnectionController @Inject constructor(
         const val IDLE_HEARTBEAT_MS = 16_000L
         const val ACTIVE_HEARTBEAT_MS = 10_000L
         const val PEER_SCAN_INTERVAL_MS = 30_000L
+        const val BOOTSTRAP_SCAN_INTERVAL_MS = 3_000L
         const val IDLE_HOTSPOT_CHECK_MS = 30_000L
         const val ACTIVE_HOTSPOT_CHECK_MS = 4_000L
     }

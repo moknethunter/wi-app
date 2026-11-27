@@ -431,6 +431,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (session.overlayStatus.isNotBlank()) Text(session.overlayStatus)
+            if (session.number != null) {
+                Text(if (session.publishedOverlayLinks > 0)
+                    "إعلان العقدة منشور على ${session.publishedOverlayLinks} وصلة محلية"
+                else "لم يؤكد النظام نشر إعلان العقدة بعد")
+            }
             session.overlayHealth?.let { health ->
                 Panel("فحص الشبكة التراكبية") {
                     Text(when (health.state) {
