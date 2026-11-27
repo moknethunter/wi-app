@@ -68,6 +68,21 @@ class AndroidVpnLifecycleTest {
                         activity.controller.start(activity.controller.listAddresses().first())
                     }
                     waitFor(true)
+
+                    // Exercise a replacement without waiting for the stop
+                    // intent or the native worker to finish the old session.
+                    scenario.onActivity { activity ->
+                        activity.controller.stop()
+                        activity.controller.start(activity.controller.listAddresses().first())
+                    }
+                    val deadline = SystemClock.elapsedRealtime() + 15_000
+                    var ready = false
+                    while (!ready && SystemClock.elapsedRealtime() < deadline) {
+                        scenario.onActivity { ready = it.controller.state.value.overlayHealth != null }
+                        if (!ready) SystemClock.sleep(100)
+                    }
+                    assertTrue("The replacement must publish fresh tunnel health", ready)
+                    waitFor(true)
                 } finally {
                     scenario.onActivity { it.controller.stop() }
                     waitFor(false)

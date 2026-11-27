@@ -62,9 +62,9 @@ class WikallVpnService : VpnService() {
         return START_NOT_STICKY
     }
 
-    private fun startSession(request: OverlayRequest, command: Long) {
+    private fun startSession(request: OverlayRequest, command: Long, allowTunnelReuse: Boolean = true) {
         val previous = current
-        val keepTunnel = previous != null && previous.pin == request.pin &&
+        val keepTunnel = allowTunnelReuse && previous != null && previous.pin == request.pin &&
             previous.number == request.number && previous.secret == request.secret && tunnel != null
         val stopped = if (keepTunnel) stopEngine() else tearDown()
         if (!lifecycle.isCurrent(command)) return
@@ -154,8 +154,8 @@ class WikallVpnService : VpnService() {
                 return
             }
             if (attachedPlan != null) {
-                closeTunnel()
-                publish(request, command) { controller.overlayAwaitingAddress(request) }
+                rebuildTunnel(request, command)
+                return
             }
             // A provisioned mobile Node can listen/advertise without a virtual IP.
             // EasyTier DHCP waits for peers. Do not kill a healthy engine just because
@@ -177,13 +177,16 @@ class WikallVpnService : VpnService() {
             }
             return
         }
+        if (attachedPlan != null && attachedPlan != plan) {
+            rebuildTunnel(request, command)
+            return
+        }
         unknownSamples = 0
         val attachRequired = addressDeadline != 0L || attachedPlan != plan || tunnel == null
         if (attachRequired) {
             val attached = runCatching {
                 val monitor = NetworkStateMonitor(this)
                 check(!monitor.overlayConflictsWithLocalSubnet())
-                if (attachedPlan != plan) closeTunnel()
                 val physical = monitor.localLinks().map { it.first }.distinct()
                 android.util.Log.i(LOG_TAG, "native_address_accepted prefix=${plan.prefix} physical_links=${physical.size}")
                 val descriptor = tunnel ?: checkNotNull(Builder()
@@ -213,6 +216,13 @@ class WikallVpnService : VpnService() {
         val health = assessOverlayHealth(snapshot, plan.address, plan.prefix)
         publish(request, command) { controller.overlayHealthChanged(request, health) }
         scheduleHealth(request, command, HEALTH_INTERVAL_MS)
+    }
+
+    private fun rebuildTunnel(request: OverlayRequest, command: Long) {
+        // EasyTier borrows this fd asynchronously. Stop its reader before
+        // closing the descriptor or opening a replacement with a reused fd.
+        publish(request, command) { controller.overlayAwaitingAddress(request) }
+        startSession(request, command, allowTunnelReuse = false)
     }
 
     private fun closeTunnel() {
