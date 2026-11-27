@@ -64,6 +64,18 @@ class OverlayEngineContractTest {
         assertFalse(request.toString().contains(request.secret))
     }
 
+    @Test fun onlySameTransportSessionCanReuseItsTun() {
+        val active = request().copy(listenerAddresses = listOf("192.168.1.3"), transportRevision = 7)
+        val retry = active.copy(transportRevision = 8)
+        val newLink = active.copy(listenerAddresses = listOf("172.16.0.2"))
+
+        assertTrue(active.canReuseTunnelFor(active.copy(peer = "192.168.1.5")))
+        assertFalse(active.canReuseTunnelFor(retry))
+        assertFalse(active.canReuseTunnelFor(newLink))
+        assertNotEquals(active, retry)
+        assertEquals(active.configuration(), retry.configuration())
+    }
+
     @Test fun invalidTunDescriptorNeverReachesNativeDriver() {
         val driver = RecordingNative()
         val engine: OverlayEngine = EasyTierEngine(driver)

@@ -84,7 +84,7 @@ internal class ConnectionController @Inject constructor(
     private val directory = DirectorySessionManager(store)
     private var monitoring = false
     private var topology: List<String>? = null
-    private var physicalLinkRevision = 0L
+    private var transportRevision = 0L
     private val recovery = RecoveryManager(main)
     private var hotspotPoll: Runnable? = null
     private val networkMonitor = NetworkStateMonitor(context)
@@ -395,7 +395,7 @@ internal class ConnectionController @Inject constructor(
         }
         openOverlay(OverlayRequest(
             pin, overlayCredentials.current().first, HOST_NUMBER, links.preferredPeer,
-            links.otherPeers, links.listeners, physicalLinkRevision,
+            links.otherPeers, links.listeners, transportRevision,
         ))
     }
 
@@ -406,7 +406,7 @@ internal class ConnectionController @Inject constructor(
         val links = overlayLinks(overlayPeer ?: saved.activation.address) ?: return
         openOverlay(OverlayRequest(
             saved.pin, secret, saved.activation.number, links.preferredPeer,
-            links.otherPeers, links.listeners, physicalLinkRevision,
+            links.otherPeers, links.listeners, transportRevision,
         ))
     }
 
@@ -450,6 +450,7 @@ internal class ConnectionController @Inject constructor(
         val firstReady = overlayIp == null && address != null
         overlayIp = address
         if (address == null) {
+            transportRevision++
             overlayRequest = null
             stopPeerDiscovery()
             overlayAnnouncement.close()
@@ -952,6 +953,7 @@ internal class ConnectionController @Inject constructor(
 
     fun stop() {
         generation++
+        transportRevision++
         lanAttempt++
         val hadOverlay = overlayRequest != null
         overlayRequest = null
@@ -1022,7 +1024,7 @@ internal class ConnectionController @Inject constructor(
 
     private fun monitorNetwork(serveHotspot: Boolean = false) {
         val updated = currentTopology()
-        if (topology != updated) physicalLinkRevision++
+        if (topology != updated) transportRevision++
         topology = updated
         monitoring = true
         runCatching { networkMonitor.start(::scheduleNetworkCheck) }
@@ -1059,7 +1061,7 @@ internal class ConnectionController @Inject constructor(
                 val updated = currentTopology()
                 topology = updated
                 if (updated == previous) return@schedule
-                physicalLinkRevision++
+                transportRevision++
                 stopPeerDiscovery()
                 if (physicalAddresses().isEmpty() && overlayRequest != null) {
                     overlayRequest = null
