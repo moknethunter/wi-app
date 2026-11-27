@@ -21,3 +21,22 @@ internal fun nativeAddressPlan(snapshot: EasyTierSnapshot?, request: OverlayRequ
     if (networkAddress != OVERLAY_NETWORK) return null
     return VirtualAddressPlan(address, prefix, networkAddress)
 }
+
+/** Routes provide possible endpoints. TLS must still authenticate the saved activation authority. */
+internal fun overlayDirectoryCandidates(
+    routes: List<NativeRoute>?,
+    localAddress: String,
+    existing: String?,
+): List<String> {
+    val reported = routes.orEmpty().groupBy { it.destinationPeer }.values.asSequence()
+        .mapNotNull { observations -> observations.distinct().singleOrNull() }
+        .filter { it.cost != null && it.cost > 0 }
+        .sortedBy { it.cost }
+        .mapNotNull { it.address }
+        .filter { it != OVERLAY_NETWORK && it != "10.126.127.255" && overlayAddress(it) }
+    return (sequenceOf(OVERLAY_HOST) + reported)
+        .distinct()
+        .filter { it != localAddress && it != existing }
+        .take(4)
+        .toList()
+}

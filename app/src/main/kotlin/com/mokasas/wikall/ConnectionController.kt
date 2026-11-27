@@ -79,6 +79,7 @@ internal class ConnectionController @Inject constructor(
     internal var overlayRequest: OverlayRequest? = null
         private set
     @Volatile private var overlayIp: String? = null
+    private var overlayDirectoryRoutes: List<NativeRoute>? = null
     private var overlayPeer: String? = null
     private var discoveredOverlayPeers = emptyList<String>()
     private val directory = DirectorySessionManager(store)
@@ -344,10 +345,12 @@ internal class ConnectionController @Inject constructor(
         discoveredOverlayPeers = emptyList()
     }
 
-    private fun overlayFallback(existing: String?): List<String> =
-        if (overlayIp != null && overlayRequest?.number != HOST_NUMBER && existing != OVERLAY_HOST) {
-            listOf(OVERLAY_HOST)
-        } else emptyList()
+    private fun overlayFallback(existing: String?): List<String> {
+        val address = overlayIp ?: return emptyList()
+        val request = overlayRequest ?: return emptyList()
+        if (request.number == HOST_NUMBER) return emptyList()
+        return overlayDirectoryCandidates(overlayDirectoryRoutes, address, existing)
+    }
 
     private fun announcementLinks(addresses: Set<String>): Set<Network?> {
         if (addresses.isEmpty()) return emptySet()
@@ -435,6 +438,7 @@ internal class ConnectionController @Inject constructor(
     internal fun overlayAwaitingAddress(request: OverlayRequest) {
         if (overlayRequest != request) return
         overlayIp = null
+        overlayDirectoryRoutes = null
         runCatching { host?.setOverlayAddress(null) }
         publish(state.value.copy(overlayStatus = "بانتظار تخصيص عنوان النفق المحلي…", overlayHealth = null))
     }
@@ -448,6 +452,7 @@ internal class ConnectionController @Inject constructor(
     internal fun overlayChanged(request: OverlayRequest, address: String?) {
         if (overlayRequest != request) return
         val firstReady = overlayIp == null && address != null
+        if (overlayIp != address) overlayDirectoryRoutes = null
         overlayIp = address
         if (address == null) {
             transportRevision++
@@ -480,8 +485,13 @@ internal class ConnectionController @Inject constructor(
     }
 
     /** Only accept diagnostics belonging to the current running tunnel. */
-    internal fun overlayHealthChanged(request: OverlayRequest, health: OverlayHealth) {
+    internal fun overlayHealthChanged(
+        request: OverlayRequest,
+        health: OverlayHealth,
+        routes: List<NativeRoute>? = null,
+    ) {
         if (overlayRequest != request || overlayIp == null) return
+        overlayDirectoryRoutes = routes
         if (state.value.overlayHealth != health) publish(state.value.copy(overlayHealth = health))
     }
 
@@ -958,6 +968,7 @@ internal class ConnectionController @Inject constructor(
         val hadOverlay = overlayRequest != null
         overlayRequest = null
         overlayIp = null
+        overlayDirectoryRoutes = null
         overlayPeer = null
         stopPeerDiscovery()
         masterAnnouncements.close()
@@ -1066,6 +1077,7 @@ internal class ConnectionController @Inject constructor(
                 if (physicalAddresses().isEmpty() && overlayRequest != null) {
                     overlayRequest = null
                     overlayIp = null
+                    overlayDirectoryRoutes = null
                     overlayAnnouncement.close()
                     runCatching { host?.setOverlayAddress(null) }
                     requestOverlayStop()

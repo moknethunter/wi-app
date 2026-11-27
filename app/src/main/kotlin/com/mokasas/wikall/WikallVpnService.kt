@@ -227,7 +227,7 @@ class WikallVpnService : VpnService() {
             publish(request, command) { controller.overlayChanged(request, plan.address) }
         }
         val health = assessOverlayHealth(snapshot, plan.address, plan.prefix)
-        publish(request, command) { controller.overlayHealthChanged(request, health) }
+        publish(request, command) { controller.overlayHealthChanged(request, health, snapshot?.routeDetails) }
         scheduleHealth(request, command, HEALTH_INTERVAL_MS)
     }
 
