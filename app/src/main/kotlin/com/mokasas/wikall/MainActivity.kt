@@ -431,6 +431,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (session.overlayStatus.isNotBlank()) Text(session.overlayStatus)
+            session.overlayHealth?.let { health ->
+                Panel("فحص الشبكة التراكبية") {
+                    Text(when (health.state) {
+                        OverlayHealthState.UNKNOWN -> "تعذّر قراءة حالة المحرك."
+                        OverlayHealthState.STOPPED -> "المحرك متوقف."
+                        OverlayHealthState.TUN_MISMATCH -> "إعداد المحرك لا يطابق النفق."
+                        OverlayHealthState.NO_PEERS -> "المحرك يعمل، لا توجد عقد معلنة."
+                        OverlayHealthState.PEERS_REPORTED -> "المحرك يعمل وتوجد عقد معلنة؛ الوصول يحتاج تحققًا."
+                        OverlayHealthState.RUNNING -> "المحرك يعمل؛ عدد العقد غير متاح."
+                    })
+                    health.peers?.let { Text("العقد المعلنة: $it") }
+                    health.routes?.let { Text("المسارات المعلنة: $it") }
+                }
+            }
             if (session.callId == null && session.number != null) {
                 Action("تفعيل الشبكة التراكبية المحلية", true) {
                     val permission = VpnService.prepare(this@MainActivity)
