@@ -14,6 +14,15 @@ class AndroidOverlayEngineTest {
         val request = OverlayRequest("A".repeat(64), "X".repeat(32), HOST_NUMBER, null)
         try {
             assertEquals(0, EasyTierJNI.runNetworkInstance(request.configuration()))
+            val engine = EasyTierEngine()
+            val deadline = SystemClock.elapsedRealtime() + 10_000
+            var snapshot: EasyTierSnapshot? = null
+            while (snapshot?.running != true && SystemClock.elapsedRealtime() < deadline) {
+                snapshot = engine.snapshot(OVERLAY_INSTANCE)
+                if (snapshot?.running != true) SystemClock.sleep(100)
+            }
+            assertEquals("Native engine must report the requested instance name", true, snapshot?.running)
+            assertNull("Unexpected fallback instance name", engine.snapshot("default"))
         } finally {
             assertEquals(0, EasyTierJNI.retainNetworkInstance(null))
         }
@@ -27,8 +36,7 @@ class AndroidOverlayEngineTest {
             DatagramSocket(0).use { second -> first.localPort to second.localPort }
         }
         fun testConfig(request: OverlayRequest, name: String, port: Int, peer: Int? = null): String {
-            val config = request.configuration()
-                .replace("inst_name = \"wikall\"", "inst_name = \"$name\"")
+            val config = request.configuration(name)
                 .replace("udp://0.0.0.0:$OVERLAY_PORT", "udp://127.0.0.1:$port")
                 .replace("[flags]", "[flags]\nno_tun = true\nbind_device = false")
             return if (peer == null) config else config + "\n[[peer]]\nuri = \"udp://127.0.0.1:$peer\"\n"

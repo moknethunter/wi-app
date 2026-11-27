@@ -21,8 +21,10 @@ internal data class OverlayRequest(val pin: String, val secret: String, val numb
     // Only the directory owner seeds the current realm. Clients never derive IP from number.
     val seedAddress: String? get() = OVERLAY_HOST.takeIf { number == HOST_NUMBER }
 
-    fun configuration() = buildString {
-        appendLine("inst_name = \"$OVERLAY_INSTANCE\"")
+    fun configuration(instanceName: String = OVERLAY_INSTANCE) = buildString {
+        require(instanceName.matches(Regex("[a-zA-Z0-9_-]{1,64}")))
+        // EasyTier v2.6.4 TomlConfigLoader expects instance_name, not inst_name.
+        appendLine("instance_name = \"$instanceName\"")
         seedAddress?.let { appendLine("ipv4 = \"$it/$OVERLAY_PREFIX\"") }
             ?: appendLine("dhcp = true")
         val listeners = listenerAddresses.ifEmpty { listOf("0.0.0.0") }

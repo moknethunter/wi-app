@@ -25,7 +25,7 @@ internal class EasyTierEngine {
     /** Call from a worker thread. Missing data is unknown, never fake success. */
     @Synchronized
     fun snapshot(instance: String): EasyTierSnapshot? =
-        EasyTierJNI.collectNetworkInfos(10)?.let { decodeEasyTierSnapshot(it, instance) }
+        EasyTierJNI.collectNetworkInfos()?.let { decodeEasyTierSnapshot(it, instance) }
 }
 
 internal data class EasyTierSnapshot(

@@ -58,7 +58,7 @@ class WikallVpnService : VpnService() {
             check(!NetworkStateMonitor(this).overlayConflictsWithLocalSubnet())
             engine.start(request.configuration())
             engineStarted = true
-        }.isSuccess
+        }.onFailure { android.util.Log.w(LOG_TAG, "native_start_or_subnet_check_failed") }.isSuccess
         if (started) {
             addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
             scheduleHealth(request, healthGeneration, 0L)
@@ -85,7 +85,8 @@ class WikallVpnService : VpnService() {
             healthTask = null
             if (generation != healthGeneration || current != request || !engineStarted) return@Runnable
             diagnostics.execute {
-                val snapshot = runCatching { engine.snapshot(OVERLAY_INSTANCE) }.getOrNull()
+                val snapshot = runCatching { engine.snapshot(OVERLAY_INSTANCE) }
+                    .onFailure { android.util.Log.w(LOG_TAG, "native_snapshot_failed") }.getOrNull()
                 main.post {
                     if (generation == healthGeneration && current == request && engineStarted &&
                         controller.overlayRequest == request) {
@@ -99,6 +100,7 @@ class WikallVpnService : VpnService() {
     private fun applySnapshot(request: OverlayRequest, generation: Long, snapshot: EasyTierSnapshot?) {
         val plan = nativeAddressPlan(snapshot, request)
         if (snapshot?.running == false) {
+            android.util.Log.w(LOG_TAG, "native_instance_stopped")
             failRequest(request)
             return
         }
@@ -125,6 +127,9 @@ class WikallVpnService : VpnService() {
             }
             if (addressDeadline == 0L) addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
             if (SystemClock.elapsedRealtime() >= addressDeadline) {
+                android.util.Log.w(LOG_TAG, if (snapshot == null) "native_instance_not_reported"
+                    else if (snapshot.address == null) "native_address_not_reported"
+                    else "native_address_policy_rejected")
                 failRequest(request)
             } else {
                 scheduleHealth(request, generation, ADDRESS_POLL_MS)
@@ -149,7 +154,7 @@ class WikallVpnService : VpnService() {
                 setUnderlyingNetworks(physical.takeIf { it.isNotEmpty() }?.toTypedArray())
                 engine.attachTun(OVERLAY_INSTANCE, descriptor.fd)
                 attachedPlan = plan
-            }.isSuccess
+            }.onFailure { android.util.Log.w(LOG_TAG, "tun_establish_or_attach_failed") }.isSuccess
             if (!attached) {
                 failRequest(request)
                 return
@@ -194,6 +199,7 @@ class WikallVpnService : VpnService() {
     }
 
     private companion object {
+        const val LOG_TAG = "WiKallVpn"
         const val CHANNEL = "wikall-overlay"
         const val NOTIFICATION_ID = 703
         const val HEALTH_INTERVAL_MS = 5_000L

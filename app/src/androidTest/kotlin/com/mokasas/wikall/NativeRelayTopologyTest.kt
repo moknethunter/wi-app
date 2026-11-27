@@ -31,8 +31,7 @@ class NativeRelayTopologyTest {
         fun config(index: Int, upstream: Int?): String {
             val name = "wikall-relay-test-$index"
             val ip = "10.126.124.${index + 1}"
-            val local = realm.configuration()
-                .replace("inst_name = \"wikall\"", "inst_name = \"$name\"")
+            val local = realm.configuration(name)
                 .replace("ipv4 = \"$OVERLAY_HOST/$OVERLAY_PREFIX\"", "ipv4 = \"$ip/$OVERLAY_PREFIX\"")
                 .replace("udp://0.0.0.0:$OVERLAY_PORT", "udp://127.0.0.1:${ports[index]}")
                 .replace("[flags]", "[flags]\nno_tun = true\nbind_device = false\ndisable_p2p = true")
