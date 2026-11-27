@@ -79,7 +79,7 @@ class WikallVpnService : VpnService() {
             check(localTransportAvailable(request)) { "local_transport_unavailable" }
             // A failed start may still have registered native resources.
             engineToStop = engine
-            engine.start(request)
+            engine.start(request, socketPolicy = AndroidOverlaySocketPolicy(this, request.listenerAddresses))
             android.util.Log.i(LOG_TAG, "native_start_requested")
         }.onFailure {
             val category = if (it.message == "local_subnet_conflict") "local_subnet_conflict"

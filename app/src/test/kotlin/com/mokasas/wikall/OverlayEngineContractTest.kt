@@ -25,6 +25,10 @@ class OverlayEngineContractTest {
             events += "attach:$instance:$fd"
             return 0
         }
+        override fun setSocketPolicy(policy: OverlaySocketPolicy?): Int {
+            events += if (policy == null) "unregister" else "register"
+            return 0
+        }
         override fun stopAll(): Int {
             events += "stop"
             return 0
@@ -44,6 +48,17 @@ class OverlayEngineContractTest {
         assertNull(engine.snapshot("contract"))
         engine.stopAll()
         assertEquals(listOf("parse", "start", "attach:contract:12", "stop"), driver.events)
+    }
+
+    @Test fun socketPolicyLivesUntilTheNativeRegistryStops() {
+        val driver = RecordingNative()
+        val engine: OverlayEngine = EasyTierEngine(driver)
+        try {
+            engine.start(request(), socketPolicy = OverlaySocketPolicy { _, _ -> -1 })
+        } finally {
+            engine.stopAll()
+        }
+        assertEquals(listOf("parse", "register", "start", "stop", "unregister"), driver.events)
     }
 
     @Test fun rejectedConfigurationNeverStartsNativeEngine() {

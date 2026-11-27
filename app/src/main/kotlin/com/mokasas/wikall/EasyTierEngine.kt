@@ -10,12 +10,16 @@ import org.json.JSONObject
 internal class EasyTierEngine(
     private val native: EasyTierNativeControl = JniEasyTierControl,
 ) : OverlayEngine {
-    override fun start(request: OverlayRequest, instance: String) =
-        start(request.configuration(instance))
+    override fun start(request: OverlayRequest, instance: String, socketPolicy: OverlaySocketPolicy?) =
+        start(request.configuration(instance), socketPolicy)
 
     /** Native instrumentation fixtures use explicit loopback configurations. */
-    internal fun start(configuration: String): Unit = synchronized(nativeLock) {
+    internal fun start(configuration: String, socketPolicy: OverlaySocketPolicy? = null): Unit = synchronized(nativeLock) {
         checked("config_rejected") { native.parse(configuration) }
+        if (socketPolicy != null) {
+            checked("socket_policy_rejected") { native.setSocketPolicy(socketPolicy) }
+            hasSocketPolicy = true
+        }
         checked("start_failed") { native.start(configuration) }
     }
 
@@ -26,6 +30,10 @@ internal class EasyTierEngine(
 
     override fun stopAll(): Unit = synchronized(nativeLock) {
         checked("stop_failed") { native.stopAll() }
+        if (hasSocketPolicy) {
+            checked("socket_policy_release_failed") { native.setSocketPolicy(null) }
+            hasSocketPolicy = false
+        }
     }
 
     override fun snapshot(instance: String): OverlaySnapshot? = synchronized(nativeLock) {
@@ -48,6 +56,7 @@ internal class EasyTierEngine(
 
     private companion object {
         val nativeLock = Any()
+        var hasSocketPolicy = false
     }
 }
 

@@ -107,9 +107,15 @@ internal class NetworkStateMonitor(context: Context) {
             !overlayAddress(source.hostAddress.orEmpty()) && prefix in 1..32 &&
             sameIpv4Subnet(source.address, target.address, prefix)
 
-    private fun hotspotAddresses() = NetworkInterface.getNetworkInterfaces().toList()
-        .filter { it.isUp && !it.isLoopback && HOTSPOT_INTERFACES.any(it.name::startsWith) }
+    fun hotspotInterfaceIndex(source: String): Int? = hotspotInterfaces()
+        .filter { network -> network.interfaceAddresses.any { it.address.hostAddress == source } }
+        .singleOrNull()?.index?.takeIf { it > 0 }
+
+    private fun hotspotAddresses() = hotspotInterfaces()
         .flatMap { it.interfaceAddresses }.filter { it.address is Inet4Address }
+
+    private fun hotspotInterfaces() = NetworkInterface.getNetworkInterfaces().toList()
+        .filter { it.isUp && !it.isLoopback && HOTSPOT_INTERFACES.any(it.name::startsWith) }
 
     private companion object {
         val HOTSPOT_INTERFACES = listOf("ap", "softap", "swlan", "wlan", "p2p")
