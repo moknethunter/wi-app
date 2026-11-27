@@ -35,6 +35,7 @@ internal data class EasyTierSnapshot(
     val peers: Int?,
     val routes: Int?,
     val routeDetails: List<NativeRoute>? = null,
+    val failureCategory: String? = null,
 )
 
 internal fun decodeEasyTierSnapshot(json: String, instance: String): EasyTierSnapshot? {
@@ -48,6 +49,7 @@ internal fun decodeEasyTierSnapshot(json: String, instance: String): EasyTierSna
         info.opt("running") as? Boolean,
         ip, prefix, info.optJSONArray("peers")?.length(), info.optJSONArray("routes")?.length(),
         decodeNativeRoutes(info),
+        nativeFailureCategory(info.opt("error_msg") as? String ?: info.opt("errorMsg") as? String),
     )
 }
 
@@ -77,4 +79,17 @@ private fun decodeNativeRoutes(info: JSONObject): List<NativeRoute>? {
         result.add(NativeRoute(destination, nextHop, address, cost))
     }
     return result
+}
+
+/** Native error strings can contain configuration and credentials. Never log them verbatim. */
+internal fun nativeFailureCategory(message: String?): String? {
+    val error = message?.takeIf { it.isNotBlank() }?.lowercase() ?: return null
+    return when {
+        "permission denied" in error || "operation not permitted" in error -> "permission_denied"
+        "address already in use" in error -> "address_in_use"
+        "network is unreachable" in error || "no route to host" in error -> "network_unreachable"
+        "instance already exists" in error -> "duplicate_instance"
+        "timed out" in error || "timeout" in error -> "timeout"
+        else -> "native_error"
+    }
 }

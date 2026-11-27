@@ -55,7 +55,9 @@ class NativeRelayTopologyTest {
                     last.destinationPeer != last.nextHopPeer
                 if (!verified) SystemClock.sleep(500)
             }
-            assertTrue("Native route table must report the last node through the middle node", verified)
+            val evidence = (0..2).joinToString(" | ") { nativeTestState(engine, "wikall-relay-test-$it") }
+            android.util.Log.i("WiKallNativeTest", evidence)
+            assertTrue("Native route table must report the last node through the middle node: $evidence", verified)
         } finally {
             engine.stopAll()
         }

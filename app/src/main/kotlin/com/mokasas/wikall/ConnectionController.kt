@@ -176,6 +176,7 @@ internal class ConnectionController @Inject constructor(
                             publish(state.value.copy(onlineUsers = onlineChannels.keys.toSet()))
                         } },
                     )
+                    if (server == null) android.util.Log.w("WiKallVpn", "local_host_not_bound")
                     if (server != null) {
                         chat.connect(pin, HOST_NUMBER, server.supportsChat) { signal ->
                             sender.execute { if (current == generation) runCatching { server.sendChatAsHost(signal) } }
@@ -382,9 +383,15 @@ internal class ConnectionController @Inject constructor(
     }
 
     private fun syncHostOverlay(pin: String) {
-        if (android.net.VpnService.prepare(context) != null) return
+        if (android.net.VpnService.prepare(context) != null) {
+            android.util.Log.i("WiKallVpn", "overlay_waiting_for_permission")
+            return
+        }
         val addresses = physicalAddresses()
-        if (addresses.isEmpty()) return
+        if (addresses.isEmpty()) {
+            android.util.Log.i("WiKallVpn", "overlay_waiting_for_physical_link")
+            return
+        }
         val peers = discoveredOverlayPeers.filter { networkMonitor.routes(it, null).isNotEmpty() }.sorted()
         openOverlay(OverlayRequest(pin, overlayCredentials.current().first, HOST_NUMBER, null,
             extraPeers = peers, listenerAddresses = addresses.sorted()))
@@ -412,7 +419,10 @@ internal class ConnectionController @Inject constructor(
         if (unchanged) return
         publish(state.value.copy(overlayStatus = "جارٍ تشغيل EasyTier…", overlayHealth = null))
         runCatching { context.startForegroundService(Intent(context, WikallVpnService::class.java)) }
-            .onFailure { overlayChanged(request, null) }
+            .onFailure {
+                android.util.Log.w("WiKallVpn", "vpn_service_start_rejected")
+                overlayChanged(request, null)
+            }
     }
 
     /** Pause the overlay route while native DHCP or TUN reconstruction is pending. */

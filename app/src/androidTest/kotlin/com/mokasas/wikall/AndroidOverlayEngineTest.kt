@@ -53,7 +53,10 @@ class AndroidOverlayEngineTest {
                 }.getOrNull()
                 if (plan == null) SystemClock.sleep(250)
             }
-            assertNotNull("Native DHCP did not report a valid address in the seeded realm", plan)
+            val evidence = listOf("wikall-dhcp-test-master", "wikall-dhcp-test-node")
+                .joinToString(" | ") { nativeTestState(engine, it) }
+            android.util.Log.i("WiKallNativeTest", evidence)
+            assertNotNull("Native DHCP did not report a valid address in the seeded realm: $evidence", plan)
             assertNotEquals(OVERLAY_HOST, plan!!.address)
             assertEquals(OVERLAY_PREFIX, plan.prefix)
         } finally {

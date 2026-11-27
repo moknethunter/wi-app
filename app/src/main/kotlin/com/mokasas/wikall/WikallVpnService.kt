@@ -55,10 +55,17 @@ class WikallVpnService : VpnService() {
         current = request
         controller.overlayAwaitingAddress(request)
         val started = runCatching {
-            check(!NetworkStateMonitor(this).overlayConflictsWithLocalSubnet())
+            check(!NetworkStateMonitor(this).overlayConflictsWithLocalSubnet()) {
+                "local_subnet_conflict"
+            }
             engine.start(request.configuration())
             engineStarted = true
-        }.onFailure { android.util.Log.w(LOG_TAG, "native_start_or_subnet_check_failed") }.isSuccess
+            android.util.Log.i(LOG_TAG, "native_start_requested")
+        }.onFailure {
+            val category = if (it.message == "local_subnet_conflict") "local_subnet_conflict"
+                else nativeFailureCategory(it.message) ?: "unknown"
+            android.util.Log.w(LOG_TAG, "native_start_failed category=$category")
+        }.isSuccess
         if (started) {
             addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
             scheduleHealth(request, healthGeneration, 0L)
@@ -100,7 +107,7 @@ class WikallVpnService : VpnService() {
     private fun applySnapshot(request: OverlayRequest, generation: Long, snapshot: EasyTierSnapshot?) {
         val plan = nativeAddressPlan(snapshot, request)
         if (snapshot?.running == false) {
-            android.util.Log.w(LOG_TAG, "native_instance_stopped")
+            android.util.Log.w(LOG_TAG, "native_instance_stopped category=${snapshot.failureCategory ?: "unknown"}")
             failRequest(request)
             return
         }
@@ -129,7 +136,7 @@ class WikallVpnService : VpnService() {
             if (SystemClock.elapsedRealtime() >= addressDeadline) {
                 android.util.Log.w(LOG_TAG, if (snapshot == null) "native_instance_not_reported"
                     else if (snapshot.address == null) "native_address_not_reported"
-                    else "native_address_policy_rejected")
+                    else "native_address_policy_rejected prefix=${snapshot.prefix} running=${snapshot.running}")
                 failRequest(request)
             } else {
                 scheduleHealth(request, generation, ADDRESS_POLL_MS)
@@ -144,6 +151,7 @@ class WikallVpnService : VpnService() {
                 check(!monitor.overlayConflictsWithLocalSubnet())
                 if (attachedPlan != plan) closeTunnel()
                 val physical = monitor.localLinks().map { it.first }.distinct()
+                android.util.Log.i(LOG_TAG, "native_address_accepted prefix=${plan.prefix} physical_links=${physical.size}")
                 val descriptor = tunnel ?: checkNotNull(Builder()
                     .setSession("WiKall")
                     .setMtu(1280)
@@ -151,10 +159,15 @@ class WikallVpnService : VpnService() {
                     .addRoute(plan.network, plan.prefix)
                     .addAllowedApplication(packageName)
                     .establish()).also { tunnel = it }
-                setUnderlyingNetworks(physical.takeIf { it.isNotEmpty() }?.toTypedArray())
+                android.util.Log.i(LOG_TAG, "android_tun_established")
+                val underlyingAccepted = setUnderlyingNetworks(physical.takeIf { it.isNotEmpty() }?.toTypedArray())
+                android.util.Log.i(LOG_TAG, "underlying_networks_accepted=$underlyingAccepted")
                 engine.attachTun(OVERLAY_INSTANCE, descriptor.fd)
+                android.util.Log.i(LOG_TAG, "native_tun_attach_requested")
                 attachedPlan = plan
-            }.onFailure { android.util.Log.w(LOG_TAG, "tun_establish_or_attach_failed") }.isSuccess
+            }.onFailure {
+                android.util.Log.w(LOG_TAG, "tun_establish_or_attach_failed category=${nativeFailureCategory(it.message) ?: "unknown"}")
+            }.isSuccess
             if (!attached) {
                 failRequest(request)
                 return
@@ -187,6 +200,7 @@ class WikallVpnService : VpnService() {
     private fun stopEngine() {
         stopHealthPolling()
         if (engineStarted) runCatching { engine.stopAll() }
+            .onFailure { android.util.Log.w(LOG_TAG, "native_stop_failed category=${nativeFailureCategory(it.message) ?: "unknown"}") }
         engineStarted = false
     }
 
