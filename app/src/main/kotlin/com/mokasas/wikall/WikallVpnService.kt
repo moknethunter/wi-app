@@ -9,6 +9,7 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import java.util.concurrent.Executors
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -19,6 +20,9 @@ class WikallVpnService : VpnService() {
     private var current: OverlayRequest? = null
     private var tunnel: ParcelFileDescriptor? = null
     private var engineStarted = false
+    private var attachedPlan: VirtualAddressPlan? = null
+    private var addressDeadline = 0L
+    private var unknownSamples = 0
     private val engine = EasyTierEngine()
     private val main = Handler(Looper.getMainLooper())
     private val diagnostics = Executors.newSingleThreadExecutor()
@@ -42,35 +46,24 @@ class WikallVpnService : VpnService() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        if (request == current && tunnel != null) return START_NOT_STICKY
+        if (request == current && engineStarted) return START_NOT_STICKY
 
         val previous = current
-        val keepTunnel = previous != null && previous.address == request.address && previous.pin == request.pin && tunnel != null
+        val keepTunnel = previous != null && previous.pin == request.pin &&
+            previous.number == request.number && previous.secret == request.secret && tunnel != null
         if (keepTunnel) stopEngine() else tearDown()
         current = request
+        controller.overlayAwaitingAddress(request)
         val started = runCatching {
-            val monitor = NetworkStateMonitor(this)
-            check(!monitor.overlayConflictsWithLocalSubnet())
+            check(!NetworkStateMonitor(this).overlayConflictsWithLocalSubnet())
             engine.start(request.configuration())
             engineStarted = true
-            val physical = monitor.localLinks().map { it.first }.distinct()
-            val descriptor = tunnel ?: checkNotNull(Builder()
-                .setSession("WiKall")
-                .setMtu(1280)
-                .addAddress(request.address, OVERLAY_PREFIX)
-                .addRoute(OVERLAY_NETWORK, OVERLAY_PREFIX)
-                .addAllowedApplication(packageName)
-                .establish()).also { tunnel = it }
-            setUnderlyingNetworks(physical.takeIf { it.isNotEmpty() }?.toTypedArray())
-            engine.attachTun(OVERLAY_INSTANCE, descriptor.fd)
         }.isSuccess
-
-        controller.overlayChanged(request, if (started) request.address else null)
         if (started) {
+            addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
             scheduleHealth(request, healthGeneration, 0L)
         } else {
-            tearDown()
-            stopSelf(startId)
+            failRequest(request)
         }
         return START_NOT_STICKY
     }
@@ -93,15 +86,82 @@ class WikallVpnService : VpnService() {
             if (generation != healthGeneration || current != request || !engineStarted) return@Runnable
             diagnostics.execute {
                 val snapshot = runCatching { engine.snapshot(OVERLAY_INSTANCE) }.getOrNull()
-                val health = assessOverlayHealth(snapshot, request.address, OVERLAY_PREFIX)
                 main.post {
-                    if (generation == healthGeneration && current == request && engineStarted) {
-                        controller.overlayHealthChanged(request, health)
-                        scheduleHealth(request, generation, HEALTH_INTERVAL_MS)
+                    if (generation == healthGeneration && current == request && engineStarted &&
+                        controller.overlayRequest == request) {
+                        applySnapshot(request, generation, snapshot)
                     }
                 }
             }
         }.also { main.postDelayed(it, delay) }
+    }
+
+    private fun applySnapshot(request: OverlayRequest, generation: Long, snapshot: EasyTierSnapshot?) {
+        val plan = nativeAddressPlan(snapshot, request)
+        if (snapshot?.running == false) {
+            failRequest(request)
+            return
+        }
+        if (plan == null) {
+            // A single missing diagnostic after attachment may be transient.
+            if (snapshot?.running == null && attachedPlan != null && unknownSamples++ < 2 &&
+                addressDeadline == 0L) {
+                controller.overlayHealthChanged(request, OverlayHealth(OverlayHealthState.UNKNOWN))
+                scheduleHealth(request, generation, HEALTH_INTERVAL_MS)
+                return
+            }
+            if (attachedPlan != null) {
+                closeTunnel()
+                controller.overlayAwaitingAddress(request)
+            }
+            if (addressDeadline == 0L) addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
+            if (SystemClock.elapsedRealtime() >= addressDeadline) {
+                failRequest(request)
+            } else {
+                scheduleHealth(request, generation, ADDRESS_POLL_MS)
+            }
+            return
+        }
+        unknownSamples = 0
+        val attachRequired = addressDeadline != 0L || attachedPlan != plan || tunnel == null
+        if (attachRequired) {
+            val attached = runCatching {
+                val monitor = NetworkStateMonitor(this)
+                check(!monitor.overlayConflictsWithLocalSubnet())
+                if (attachedPlan != plan) closeTunnel()
+                val physical = monitor.localLinks().map { it.first }.distinct()
+                val descriptor = tunnel ?: checkNotNull(Builder()
+                    .setSession("WiKall")
+                    .setMtu(1280)
+                    .addAddress(plan.address, plan.prefix)
+                    .addRoute(plan.network, plan.prefix)
+                    .addAllowedApplication(packageName)
+                    .establish()).also { tunnel = it }
+                setUnderlyingNetworks(physical.takeIf { it.isNotEmpty() }?.toTypedArray())
+                engine.attachTun(OVERLAY_INSTANCE, descriptor.fd)
+                attachedPlan = plan
+            }.isSuccess
+            if (!attached) {
+                failRequest(request)
+                return
+            }
+            addressDeadline = 0L
+            controller.overlayChanged(request, plan.address)
+        }
+        controller.overlayHealthChanged(request, assessOverlayHealth(snapshot, plan.address, plan.prefix))
+        scheduleHealth(request, generation, HEALTH_INTERVAL_MS)
+    }
+
+    private fun closeTunnel() {
+        runCatching { tunnel?.close() }
+        tunnel = null
+        attachedPlan = null
+    }
+
+    private fun failRequest(request: OverlayRequest) {
+        tearDown()
+        controller.overlayChanged(request, null)
+        stopSelf()
     }
 
     private fun stopHealthPolling() {
@@ -118,8 +178,9 @@ class WikallVpnService : VpnService() {
 
     private fun tearDown() {
         stopEngine()
-        runCatching { tunnel?.close() }
-        tunnel = null
+        closeTunnel()
+        addressDeadline = 0L
+        unknownSamples = 0
         current = null
     }
 
@@ -127,5 +188,7 @@ class WikallVpnService : VpnService() {
         const val CHANNEL = "wikall-overlay"
         const val NOTIFICATION_ID = 703
         const val HEALTH_INTERVAL_MS = 5_000L
+        const val ADDRESS_POLL_MS = 500L
+        const val ADDRESS_TIMEOUT_MS = 20_000L
     }
 }

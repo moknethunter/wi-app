@@ -365,6 +365,14 @@ internal class ConnectionController @Inject constructor(
             .onFailure { overlayChanged(request, null) }
     }
 
+    /** Pause the overlay route while native DHCP or TUN reconstruction is pending. */
+    internal fun overlayAwaitingAddress(request: OverlayRequest) {
+        if (overlayRequest != request) return
+        overlayIp = null
+        runCatching { host?.setOverlayAddress(null) }
+        publish(state.value.copy(overlayStatus = "بانتظار تخصيص عنوان النفق المحلي…", overlayHealth = null))
+    }
+
     internal fun overlayChanged(request: OverlayRequest, address: String?) {
         if (overlayRequest != request) return
         val firstReady = overlayIp == null && address != null
@@ -384,8 +392,11 @@ internal class ConnectionController @Inject constructor(
         publish(state.value.copy(overlayStatus = status, overlayHealth = null))
         if (request.number != HOST_NUMBER) {
             val saved = savedClient ?: return
-            val lostTunnel = address == null && clientRoute?.path == LocalPath.OVERLAY_LOCAL
-            if (lostTunnel) recoverClient(saved, "أُغلق نفق EasyTier. جارٍ البحث عن اتصال محلي.")
+            val activeOverlay = clientRoute?.takeIf { it.path == LocalPath.OVERLAY_LOCAL }
+            val lostTunnel = address == null && activeOverlay != null
+            val changedSource = address != null && activeOverlay != null &&
+                activeOverlay.source.hostAddress != address
+            if (lostTunnel || changedSource) recoverClient(saved, "تغيّر نفق EasyTier. جارٍ استعادة الاتصال المحلي.")
             else if (firstReady && channel == null) {
                 retry?.let(main::removeCallbacks)
                 retry = null

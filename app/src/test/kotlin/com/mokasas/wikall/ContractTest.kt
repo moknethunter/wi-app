@@ -79,13 +79,15 @@ class ContractTest {
         assertThrows(IllegalArgumentException::class.java) { newOverlaySecret("short") }
     }
 
-    @Test fun overlayAddressesAreUniqueAndScopedToTheOverlay() {
+    @Test fun overlayClientsUseNativeDhcpInsteadOfUserNumberAddresses() {
         val network = (listOf(HOST_NUMBER) + userNumbers).map {
             OverlayRequest("A".repeat(64), "X".repeat(32), it, null)
         }
-        assertEquals(OVERLAY_HOST, network.first().address)
-        assertEquals(network.size, network.map { it.address }.toSet().size)
-        assertTrue(network.all { overlayAddress(it.address) })
+        assertEquals(OVERLAY_HOST, network.first().seedAddress)
+        assertTrue(network.first().configuration().contains("ipv4 = "))
+        assertTrue(network.drop(1).all { it.seedAddress == null })
+        assertTrue(network.drop(1).all { "dhcp = true" in it.configuration() && "ipv4 = " !in it.configuration() })
+        assertEquals(1, network.drop(1).map { it.configuration() }.toSet().size)
         val peers = OverlayRequest("A".repeat(64), "X".repeat(32), HOST_NUMBER,
             "192.168.1.2", listOf("192.168.1.3", "192.168.1.2"))
         assertEquals(
