@@ -1,0 +1,17 @@
+[Unit]
+Description=WiKall EasyTier gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+UMask=0077
+ExecStart=/usr/local/bin/easytier-core --disable-env-parsing --config-file /etc/wikall/easytier.toml --stun-servers --stun-servers-v6
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

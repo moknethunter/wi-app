@@ -1,0 +1,4 @@
+<paths>
+    <cache-path name="activation_requests" path="exports/requests/"/>
+    <files-path name="issued_activations" path="exports/activations/"/>
+</paths>

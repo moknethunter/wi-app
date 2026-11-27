@@ -1,0 +1,20 @@
+[Unit]
+Description=Wi-Call Internet directory
+After=network.target
+
+[Service]
+DynamicUser=yes
+StateDirectory=wi-call
+WorkingDirectory=/var/lib/wi-call
+EnvironmentFile=/etc/wi-call/directory.env
+Environment=WI_BIND=127.0.0.1
+Environment=WI_DB=/var/lib/wi-call/directory.sqlite3
+ExecStart=/opt/wi-call/venv/bin/python /opt/wi-call/directory/server.py
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

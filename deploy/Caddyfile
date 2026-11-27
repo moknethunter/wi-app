@@ -1,0 +1,3 @@
+{$WI_DIRECTORY_HOST} {
+    reverse_proxy 127.0.0.1:9080
+}
