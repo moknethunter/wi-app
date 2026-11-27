@@ -38,5 +38,10 @@
     "path": "easytier-contrib/easytier-android-jni/src/lib.rs",
     "old": "        // 使用 serde_json 构建 JSON\n        for info in infos.iter().take(count as usize) {\n            let key_ptr = info.key;\n            let val_ptr = info.value;\n            if key_ptr.is_null() || val_ptr.is_null() {\n                break;\n            }\n\n            let key = CStr::from_ptr(key_ptr).to_string_lossy();\n            let val = CStr::from_ptr(val_ptr).to_string_lossy();",
     "new": "        // FFI transfers ownership of C strings. Free all before JSON decoding.\n        let entries: Vec<(String, String)> = infos.iter().take(count as usize)\n            .filter_map(|info| {\n                let key = if info.key.is_null() { None } else {\n                    let value = CStr::from_ptr(info.key).to_string_lossy().into_owned();\n                    free_string(info.key);\n                    Some(value)\n                };\n                let val = if info.value.is_null() { None } else {\n                    let value = CStr::from_ptr(info.value).to_string_lossy().into_owned();\n                    free_string(info.value);\n                    Some(value)\n                };\n                key.zip(val)\n            }).collect();\n        for (key, val) in entries {"
+  },
+  {
+    "path": "easytier/src/tunnel/common.rs",
+    "old": "        BindDev::Auto => get_interface_name_by_ip(&addr.ip()),",
+    "new": "        // Android applications must not depend on privileged SO_BINDTODEVICE.\n        // Retain source-address binding; Android Network binding/protection is\n        // an application-level responsibility. Explicit device requests still\n        // fail normally rather than silently switching to another network.\n        BindDev::Auto if cfg!(target_os = \"android\") => None,\n        BindDev::Auto => get_interface_name_by_ip(&addr.ip()),"
   }
 ]
