@@ -7,7 +7,7 @@ internal fun OverlayRequest.configuration(instanceName: String = OVERLAY_INSTANC
     appendLine("instance_name = \"$instanceName\"")
     seedAddress?.let { appendLine("ipv4 = \"$it/$OVERLAY_PREFIX\"") }
         ?: appendLine("dhcp = true")
-    val listeners = listenerAddresses.ifEmpty { listOf("0.0.0.0") }
+    val listeners = listenerAddresses.distinct().sorted().ifEmpty { listOf("0.0.0.0") }
         .joinToString(", ") { "\"udp://$it:$OVERLAY_PORT\"" }
     appendLine("listeners = [$listeners]")
     appendLine("stun_servers = []")
