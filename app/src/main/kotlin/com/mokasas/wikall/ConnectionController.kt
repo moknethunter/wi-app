@@ -58,7 +58,10 @@ internal class ConnectionController @Inject constructor(
     // Accessed only on hostControl, including while the listener is still starting.
     private var boundHost: LocalHost? = null
     private val discovery = LanDiscovery(context)
-    private val overlayDiscovery = LanDiscovery(context, "_wikall-ol._udp.", OVERLAY_PORT, "WiKall")
+    private val overlayDiscovery = NetworkDiscoveryManager(context)
+    private val overlayPeerCache = OverlayPeerCache()
+    private var peerScanTask: Runnable? = null
+    private var peerScanPin: String? = null
     private val masterAnnouncements = LocalAnnouncements { LanDiscovery(context) }
     private val overlayAnnouncement = LocalAnnouncements { LanDiscovery(context, "_wikall-ol._udp.", OVERLAY_PORT, "WiKall") }
     @Volatile private var generation = 0
@@ -266,7 +269,6 @@ internal class ConnectionController @Inject constructor(
         retry = null
         savedClient = saved
         val attempt = ++lanAttempt
-        overlayDiscovery.close()
         publish(state.value.copy(mode = Mode.CLIENT, busy = true, address = saved.address, number = saved.activation.number, status = "جارٍ البحث عن الخادم المحلي…"))
         directory.attach(saved.pin, saved.activation.number)
         loadMissed()
@@ -274,7 +276,6 @@ internal class ConnectionController @Inject constructor(
         discovery.find(saved.pin) { address ->
             if (current == generation && attempt == lanAttempt) {
                 syncClientOverlay(saved, address)
-                if (address == null) discoverOverlayRoutes(saved, current, attempt)
                 val gateways = runCatching(networkMonitor::gateways).getOrDefault(emptyList())
                 val candidates = lanCandidates(address, gateways, saved.address, saved.activation.address)
                     .filterNot(::overlayAddress) + overlayFallback(null)
@@ -288,15 +289,51 @@ internal class ConnectionController @Inject constructor(
         }
     }
 
-    private fun discoverOverlayRoutes(saved: SavedConnection, current: Int, attempt: Int) {
-        if (saved.activation.overlaySecret == null || android.net.VpnService.prepare(context) != null) return
-        val own = runCatching(::listAddresses).getOrDefault(emptyList()).toSet()
-        overlayDiscovery.findPeers(saved.pin, own, limit = 6) { peers ->
-            if (current == generation && attempt == lanAttempt && channel == null) {
-                discoveredOverlayPeers = peers.filter { networkMonitor.routes(it, null).isNotEmpty() }
-                syncClientOverlay(saved, null)
+    /** Scan throughout the authorized session, not only after directory failure. */
+    private fun ensurePeerDiscovery(pin: String) {
+        if (peerScanPin == pin) return
+        stopPeerDiscovery()
+        peerScanPin = pin
+        schedulePeerScan(pin, 0L)
+    }
+
+    private fun schedulePeerScan(pin: String, delay: Long) {
+        peerScanTask?.let(main::removeCallbacks)
+        val sessionGeneration = generation
+        peerScanTask = Runnable {
+            peerScanTask = null
+            if (sessionGeneration != generation || peerScanPin != pin || overlayRequest?.pin != pin) return@Runnable
+            val own = physicalAddresses().toSet()
+            val links = announcementLinks(own)
+            if (links.isEmpty()) {
+                schedulePeerScan(pin, PEER_SCAN_INTERVAL_MS)
+                return@Runnable
             }
-        }
+            val reachable: (String) -> Boolean = { address ->
+                networkMonitor.routes(address, null).any { it.path != LocalPath.OVERLAY_LOCAL }
+            }
+            overlayDiscovery.scan(pin, links, own, reachable) { peers ->
+                if (sessionGeneration == generation && peerScanPin == pin && overlayRequest?.pin == pin) {
+                    discoveredOverlayPeers = overlayPeerCache.update(peers, physicalAddresses().toSet(),
+                        SystemClock.elapsedRealtime(), reachable)
+                    // The current native API restarts the instance on peer changes. Do not
+                    // interrupt a local call or a serving Master merely to add candidates.
+                    if (call.id == null && (state.value.mode != Mode.SERVER || onlineChannels.isEmpty())) {
+                        refreshOverlay()
+                    }
+                    schedulePeerScan(pin, PEER_SCAN_INTERVAL_MS)
+                }
+            }
+        }.also { main.postDelayed(it, delay) }
+    }
+
+    private fun stopPeerDiscovery() {
+        peerScanTask?.let(main::removeCallbacks)
+        peerScanTask = null
+        peerScanPin = null
+        overlayDiscovery.cancel()
+        overlayPeerCache.clear()
+        discoveredOverlayPeers = emptyList()
     }
 
     private fun overlayFallback(existing: String?): List<String> =
@@ -342,7 +379,9 @@ internal class ConnectionController @Inject constructor(
         if (android.net.VpnService.prepare(context) != null) return
         val addresses = physicalAddresses()
         if (addresses.isEmpty()) return
-        openOverlay(OverlayRequest(pin, overlayCredentials.current().first, HOST_NUMBER, null, listenerAddresses = addresses))
+        val peers = discoveredOverlayPeers.filter { networkMonitor.routes(it, null).isNotEmpty() }.sorted()
+        openOverlay(OverlayRequest(pin, overlayCredentials.current().first, HOST_NUMBER, null,
+            extraPeers = peers, listenerAddresses = addresses.sorted()))
     }
 
     private fun syncClientOverlay(saved: SavedConnection, detected: String?) {
@@ -354,12 +393,17 @@ internal class ConnectionController @Inject constructor(
         if (listeners.isEmpty()) return
         val peer = address?.takeIf { networkMonitor.routes(it, null).isNotEmpty() }
         val peers = discoveredOverlayPeers.filter { it != peer && networkMonitor.routes(it, null).isNotEmpty() }.sorted()
-        openOverlay(OverlayRequest(saved.pin, secret, saved.activation.number, peer, peers, listenerAddresses = listeners))
+        openOverlay(OverlayRequest(saved.pin, secret, saved.activation.number, peer, peers, listenerAddresses = listeners.sorted()))
     }
 
     private fun openOverlay(request: OverlayRequest) {
-        if (overlayRequest == request) return
+        val unchanged = overlayRequest == request
         overlayRequest = request
+        // Advertise a bootstrap candidate even before DHCP finishes, so two
+        // provisioned nodes can discover each other. It is not a readiness claim.
+        refreshOverlayAnnouncements(request)
+        ensurePeerDiscovery(request.pin)
+        if (unchanged) return
         publish(state.value.copy(overlayStatus = "جارٍ تشغيل EasyTier…", overlayHealth = null))
         runCatching { context.startForegroundService(Intent(context, WikallVpnService::class.java)) }
             .onFailure { overlayChanged(request, null) }
@@ -379,6 +423,7 @@ internal class ConnectionController @Inject constructor(
         overlayIp = address
         if (address == null) {
             overlayRequest = null
+            stopPeerDiscovery()
             overlayAnnouncement.close()
         } else {
             refreshOverlayAnnouncements(request)
@@ -876,8 +921,7 @@ internal class ConnectionController @Inject constructor(
         overlayRequest = null
         overlayIp = null
         overlayPeer = null
-        discoveredOverlayPeers = emptyList()
-        overlayDiscovery.close()
+        stopPeerDiscovery()
         masterAnnouncements.close()
         overlayAnnouncement.close()
         if (hadOverlay) context.stopService(Intent(context, WikallVpnService::class.java))
@@ -977,6 +1021,7 @@ internal class ConnectionController @Inject constructor(
                 val updated = currentTopology()
                 topology = updated
                 if (updated == previous) return@schedule
+                stopPeerDiscovery()
                 if (physicalAddresses().isEmpty() && overlayRequest != null) {
                     overlayRequest = null
                     overlayIp = null
@@ -1003,7 +1048,6 @@ internal class ConnectionController @Inject constructor(
                     }
                     Mode.CLIENT -> savedClient?.let { saved ->
                         overlayPeer = null
-                        discoveredOverlayPeers = emptyList()
                         val currentRoute = clientRoute
                         if (channel != null && currentRoute != null && pathManager.available(currentRoute, overlayIp)) {
                             syncClientOverlay(saved, currentRoute.address)
@@ -1054,6 +1098,7 @@ internal class ConnectionController @Inject constructor(
         // The client read timeout is 25 seconds, including for existing peers.
         const val IDLE_HEARTBEAT_MS = 16_000L
         const val ACTIVE_HEARTBEAT_MS = 10_000L
+        const val PEER_SCAN_INTERVAL_MS = 30_000L
         const val IDLE_HOTSPOT_CHECK_MS = 30_000L
         const val ACTIVE_HOTSPOT_CHECK_MS = 4_000L
     }
