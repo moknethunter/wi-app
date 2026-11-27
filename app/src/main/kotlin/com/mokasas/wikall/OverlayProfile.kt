@@ -17,15 +17,14 @@ internal data class OverlayRequest(val pin: String, val secret: String, val numb
         require((listOfNotNull(peer) + extraPeers + listenerAddresses).all { privateIpv4(it) && !overlayAddress(it) })
     }
 
-    val address: String
-        get() {
-            val offset = number.toInt() - HOST_NUMBER.toInt() + 1
-            return "10.126.${124 + offset / 256}.${offset % 256}"
-        }
+    // Transitional seed: EasyTier v2.6.4 does not assign DHCP addresses without peers.
+    // Only the directory owner seeds the current realm. Clients never derive IP from number.
+    val seedAddress: String? get() = OVERLAY_HOST.takeIf { number == HOST_NUMBER }
 
     fun configuration() = buildString {
         appendLine("inst_name = \"$OVERLAY_INSTANCE\"")
-        appendLine("ipv4 = \"$address/$OVERLAY_PREFIX\"")
+        seedAddress?.let { appendLine("ipv4 = \"$it/$OVERLAY_PREFIX\"") }
+            ?: appendLine("dhcp = true")
         val listeners = listenerAddresses.ifEmpty { listOf("0.0.0.0") }
             .joinToString(", ") { "\"udp://$it:$OVERLAY_PORT\"" }
         appendLine("listeners = [$listeners]")
