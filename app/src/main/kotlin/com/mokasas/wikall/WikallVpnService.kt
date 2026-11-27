@@ -7,6 +7,9 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.os.Handler
+import android.os.Looper
+import java.util.concurrent.Executors
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -17,6 +20,10 @@ class WikallVpnService : VpnService() {
     private var tunnel: ParcelFileDescriptor? = null
     private var engineStarted = false
     private val engine = EasyTierEngine()
+    private val main = Handler(Looper.getMainLooper())
+    private val diagnostics = Executors.newSingleThreadExecutor()
+    private var healthGeneration = 0L
+    private var healthTask: Runnable? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notifications = getSystemService(NotificationManager::class.java)
@@ -59,7 +66,9 @@ class WikallVpnService : VpnService() {
         }.isSuccess
 
         controller.overlayChanged(request, if (started) request.address else null)
-        if (!started) {
+        if (started) {
+            scheduleHealth(request, healthGeneration, 0L)
+        } else {
             tearDown()
             stopSelf(startId)
         }
@@ -74,10 +83,35 @@ class WikallVpnService : VpnService() {
         val request = current
         tearDown()
         if (request != null) controller.overlayChanged(request, null)
+        diagnostics.shutdownNow()
         super.onDestroy()
     }
 
+    private fun scheduleHealth(request: OverlayRequest, generation: Long, delay: Long) {
+        healthTask = Runnable {
+            healthTask = null
+            if (generation != healthGeneration || current != request || !engineStarted) return@Runnable
+            diagnostics.execute {
+                val snapshot = runCatching { engine.snapshot(OVERLAY_INSTANCE) }.getOrNull()
+                val health = assessOverlayHealth(snapshot, request.address, OVERLAY_PREFIX)
+                main.post {
+                    if (generation == healthGeneration && current == request && engineStarted) {
+                        controller.overlayHealthChanged(request, health)
+                        scheduleHealth(request, generation, HEALTH_INTERVAL_MS)
+                    }
+                }
+            }
+        }.also { main.postDelayed(it, delay) }
+    }
+
+    private fun stopHealthPolling() {
+        healthGeneration++
+        healthTask?.let(main::removeCallbacks)
+        healthTask = null
+    }
+
     private fun stopEngine() {
+        stopHealthPolling()
         if (engineStarted) runCatching { engine.stopAll() }
         engineStarted = false
     }
@@ -92,5 +126,6 @@ class WikallVpnService : VpnService() {
     private companion object {
         const val CHANNEL = "wikall-overlay"
         const val NOTIFICATION_ID = 703
+        const val HEALTH_INTERVAL_MS = 5_000L
     }
 }

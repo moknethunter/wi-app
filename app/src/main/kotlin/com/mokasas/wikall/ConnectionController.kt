@@ -40,6 +40,7 @@ internal data class SessionState(
     val muted: Boolean = false,
     val speaker: Boolean = false,
     val overlayStatus: String = "",
+    val overlayHealth: OverlayHealth? = null,
     val ice: String = "",
     val missed: List<IncomingMissed> = emptyList(),
 )
@@ -234,15 +235,13 @@ internal class ConnectionController @Inject constructor(
         }
     }
 
-    fun connect(activation: Activation, file: ByteArray, manual: String? = null) {
-        require(manual == null || privateIpv4(manual))
+    fun connect(activation: Activation, file: ByteArray) {
         stop()
         monitorNetwork()
-        locate(SavedConnection(manual ?: activation.address, activation, file), manual != null)
+        locate(SavedConnection(activation.address, activation, file))
     }
 
-    fun reconnect(manual: String? = null) {
-        require(manual == null || privateIpv4(manual))
+    fun reconnect() {
         stop()
         monitorNetwork()
         publish(SessionState(mode = Mode.CLIENT, busy = true, status = "جارٍ قراءة الاتصال المحفوظ…"))
@@ -251,7 +250,7 @@ internal class ConnectionController @Inject constructor(
             val saved = runCatching { store.saved(DeviceIdentity.load()) }.getOrNull()
             onMain(current) {
                 if (saved == null) publish(SessionState(mode = Mode.CLIENT, status = "استورد ملف تفعيل صادرًا لهذا الهاتف."))
-                else locate(saved.copy(address = manual ?: saved.address), manual != null)
+                else locate(saved)
             }
         }
     }
@@ -262,28 +261,28 @@ internal class ConnectionController @Inject constructor(
         publish(SessionState(mode = Mode.CLIENT, status = "حُذف الاتصال المحفوظ من هذا الهاتف."))
     }
 
-    private fun locate(saved: SavedConnection, manual: Boolean) {
+    private fun locate(saved: SavedConnection) {
+        retry?.let(main::removeCallbacks)
+        retry = null
         savedClient = saved
         val attempt = ++lanAttempt
         overlayDiscovery.close()
         publish(state.value.copy(mode = Mode.CLIENT, busy = true, address = saved.address, number = saved.activation.number, status = "جارٍ البحث عن الخادم المحلي…"))
         directory.attach(saved.pin, saved.activation.number)
         loadMissed()
-        if (manual) {
-            syncClientOverlay(saved, saved.address)
-            open(saved, overlayFallback(saved.address))
-        } else {
-            val current = generation
-            discovery.find(saved.pin) { address ->
-                if (current == generation && attempt == lanAttempt) {
-                    syncClientOverlay(saved, address)
-                    if (address == null) discoverOverlayRoutes(saved, current, attempt)
-                    val gateways = runCatching(networkMonitor::gateways).getOrDefault(emptyList())
-                    val candidates = lanCandidates(address, gateways, saved.address, saved.activation.address)
-                        .filterNot(::overlayAddress) + overlayFallback(null)
-                    val targets = candidates.distinct()
-                    if (targets.isNotEmpty()) open(saved.copy(address = targets.first()), targets.drop(1))
-                    else disconnect("لا يوجد عنوان محلي صالح للخادم.", preserveAccepted = true)
+        val current = generation
+        discovery.find(saved.pin) { address ->
+            if (current == generation && attempt == lanAttempt) {
+                syncClientOverlay(saved, address)
+                if (address == null) discoverOverlayRoutes(saved, current, attempt)
+                val gateways = runCatching(networkMonitor::gateways).getOrDefault(emptyList())
+                val candidates = lanCandidates(address, gateways, saved.address, saved.activation.address)
+                    .filterNot(::overlayAddress) + overlayFallback(null)
+                val targets = candidates.distinct()
+                if (targets.isNotEmpty()) open(saved.copy(address = targets.first()), targets.drop(1))
+                else {
+                    disconnect("بانتظار اكتشاف الخادم المحلي.", preserveAccepted = true)
+                    scheduleDiscoveryRetry()
                 }
             }
         }
@@ -361,7 +360,7 @@ internal class ConnectionController @Inject constructor(
     private fun openOverlay(request: OverlayRequest) {
         if (overlayRequest == request) return
         overlayRequest = request
-        publish(state.value.copy(overlayStatus = "جارٍ تشغيل EasyTier…"))
+        publish(state.value.copy(overlayStatus = "جارٍ تشغيل EasyTier…", overlayHealth = null))
         runCatching { context.startForegroundService(Intent(context, WikallVpnService::class.java)) }
             .onFailure { overlayChanged(request, null) }
     }
@@ -382,7 +381,7 @@ internal class ConnectionController @Inject constructor(
             !attached -> "التراكب جاهز، لكن تعذّر فتح منفذ المكالمات عليه."
             else -> "تم تشغيل النفق المحلي؛ الاتصال بالأقران قيد التحقق."
         }
-        publish(state.value.copy(overlayStatus = status))
+        publish(state.value.copy(overlayStatus = status, overlayHealth = null))
         if (request.number != HOST_NUMBER) {
             val saved = savedClient ?: return
             val lostTunnel = address == null && clientRoute?.path == LocalPath.OVERLAY_LOCAL
@@ -390,9 +389,31 @@ internal class ConnectionController @Inject constructor(
             else if (firstReady && channel == null) {
                 retry?.let(main::removeCallbacks)
                 retry = null
-                locate(saved, false)
+                locate(saved)
             }
         }
+    }
+
+    /** Only accept diagnostics belonging to the current running tunnel. */
+    internal fun overlayHealthChanged(request: OverlayRequest, health: OverlayHealth) {
+        if (overlayRequest != request || overlayIp == null) return
+        if (state.value.overlayHealth != health) publish(state.value.copy(overlayHealth = health))
+    }
+
+    /** Retry only discovery/transport failures; authentication rejection is not retried. */
+    private fun scheduleDiscoveryRetry() {
+        retry?.let(main::removeCallbacks)
+        val current = generation
+        val attempt = lanAttempt
+        val delay = discoveryRetryDelay(retryCount, call.accepted)
+        retryCount = (retryCount + 1).coerceAtMost(3)
+        retry = Runnable {
+            retry = null
+            if (current == generation && attempt == lanAttempt && monitoring &&
+                state.value.mode == Mode.CLIENT && channel == null) {
+                savedClient?.let(::locate)
+            }
+        }.also { main.postDelayed(it, delay) }
     }
 
     private fun open(saved: SavedConnection, fallback: List<String> = emptyList()) {
@@ -400,6 +421,7 @@ internal class ConnectionController @Inject constructor(
         val route = routes.firstOrNull()
         if (route == null) {
             disconnect("لا يوجد مسار محلي إلى الخادم. بانتظار Wi-Fi أو نقطة اتصال.", preserveAccepted = true)
+            scheduleDiscoveryRetry()
             return
         }
         openRoute(saved.copy(address = route.address), route, routes.drop(1))
@@ -498,18 +520,11 @@ internal class ConnectionController @Inject constructor(
                     }
                     val reason = when {
                         online -> "انقطع اتصال الخادم."
-                        addressFailure -> "تعذّر العثور على الخادم بهذا العنوان. شغّله على الشبكة الحالية أو أدخل عنوانه عبر «تغيير عنوان الخادم». التفعيل محفوظ إن سبق استخدامه."
+                        addressFailure -> "تعذّر الوصول إلى الخادم المحلي. سيعيد التطبيق البحث تلقائيًا."
                         else -> failure.message.orEmpty().ifBlank { "تعذّر الاتصال المحلي." }
                     }
                     disconnect(reason, preserveAccepted = true)
-                    val overlayRetry = addressFailure && latest.activation.overlaySecret != null &&
-                        overlayRequest?.number == latest.activation.number
-                    if (overlayRetry || (online || addressFailure && retryCount > 0) && retryCount < RETRY_DELAYS.size) {
-                        val delay = if (overlayRetry && retryCount >= RETRY_DELAYS.size && !call.accepted) 60_000L
-                            else RETRY_DELAYS[retryCount.coerceAtMost(RETRY_DELAYS.lastIndex)]
-                        retryCount = (retryCount + 1).coerceAtMost(RETRY_DELAYS.size)
-                        retry = Runnable { locate(latest, false) }.also { main.postDelayed(it, delay) }
-                    }
+                    if (online || addressFailure) scheduleDiscoveryRetry()
                 }
             } finally {
                 transport?.let { used -> runBlocking { used.stop() } }
@@ -957,7 +972,7 @@ internal class ConnectionController @Inject constructor(
                     overlayAnnouncement.close()
                     runCatching { host?.setOverlayAddress(null) }
                     context.stopService(Intent(context, WikallVpnService::class.java))
-                    publish(state.value.copy(overlayStatus = "بانتظار شبكة محلية لتشغيل EasyTier."))
+                    publish(state.value.copy(overlayStatus = "بانتظار شبكة محلية لتشغيل EasyTier.", overlayHealth = null))
                 } else overlayRequest?.takeIf { overlayIp != null }?.let(::refreshOverlayAnnouncements)
                 retry?.let(main::removeCallbacks)
                 retry = null
@@ -998,7 +1013,7 @@ internal class ConnectionController @Inject constructor(
         val old = client
         client = null
         disconnect(reason, preserveAccepted = true)
-        locate(saved, false)
+        locate(saved)
         worker.execute { runCatching { old?.close() } }
     }
 
@@ -1030,6 +1045,5 @@ internal class ConnectionController @Inject constructor(
         const val ACTIVE_HEARTBEAT_MS = 10_000L
         const val IDLE_HOTSPOT_CHECK_MS = 30_000L
         const val ACTIVE_HOTSPOT_CHECK_MS = 4_000L
-        val RETRY_DELAYS = listOf(2_000L, 4_000L, 8_000L)
     }
 }

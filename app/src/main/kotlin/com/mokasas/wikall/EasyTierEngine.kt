@@ -5,21 +5,25 @@ import org.json.JSONObject
 
 /** Native control boundary. A running engine is NOT proof of peer connectivity. */
 internal class EasyTierEngine {
+    @Synchronized
     fun start(configuration: String) {
         check(EasyTierJNI.parseConfig(configuration) == 0) { "EasyTier config rejected" }
         check(EasyTierJNI.runNetworkInstance(configuration) == 0) { "EasyTier start failed" }
     }
 
+    @Synchronized
     fun attachTun(instance: String, fd: Int) {
         require(fd >= 0)
         check(EasyTierJNI.setTunFd(instance, fd) == 0) { "EasyTier TUN attach failed" }
     }
 
+    @Synchronized
     fun stopAll() {
         check(EasyTierJNI.retainNetworkInstance(null) == 0) { "EasyTier stop failed" }
     }
 
     /** Call from a worker thread. Missing data is unknown, never fake success. */
+    @Synchronized
     fun snapshot(instance: String): EasyTierSnapshot? =
         EasyTierJNI.collectNetworkInfos(10)?.let { decodeEasyTierSnapshot(it, instance) }
 }
