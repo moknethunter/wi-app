@@ -76,6 +76,7 @@ class WikallVpnService : VpnService() {
             check(!NetworkStateMonitor(this).overlayConflictsWithLocalSubnet()) {
                 "local_subnet_conflict"
             }
+            check(localTransportAvailable(request)) { "local_transport_unavailable" }
             // A failed start may still have registered native resources.
             engineToStop = engine
             engine.start(request)
@@ -128,8 +129,22 @@ class WikallVpnService : VpnService() {
         }
     }
 
+    // A production session must never fall back to wildcard listeners when its
+    // explicitly selected local addresses disappear. This is a secondary guard,
+    // not a substitute for binding every native socket to its permitted network.
+    private fun localTransportAvailable(request: OverlayRequest): Boolean {
+        val addresses = NetworkStateMonitor(this).physicalAddresses().toSet()
+        return request.listenerAddresses.isNotEmpty() &&
+            request.listenerAddresses.all { it in addresses }
+    }
+
     private fun scheduleHealth(request: OverlayRequest, command: Long, delay: Long) {
         lifecycle.poll(command, delay) {
+            if (!localTransportAvailable(request)) {
+                android.util.Log.w(LOG_TAG, "local_transport_lost")
+                failRequest(request, command)
+                return@poll
+            }
             val snapshot = runCatching { engine.snapshot(OVERLAY_INSTANCE) }
                 .onFailure { android.util.Log.w(LOG_TAG, "native_snapshot_failed") }.getOrNull()
             if (lifecycle.isCurrent(command)) applySnapshot(request, command, snapshot)
