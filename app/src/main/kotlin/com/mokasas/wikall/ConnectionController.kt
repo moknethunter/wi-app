@@ -936,6 +936,14 @@ internal class ConnectionController @Inject constructor(
         publish(state.value.copy(peer = state.value.peer.takeIf { preserveAccepted && call.accepted }, path = null, latency = null, busy = false, status = reason))
     }
 
+    private fun requestOverlayStop() {
+        val intent = Intent(context, WikallVpnService::class.java).setAction(WikallVpnService.ACTION_STOP)
+        runCatching { context.startService(intent) }.onFailure {
+            android.util.Log.w("WiKallVpn", "vpn_stop_command_rejected")
+            context.stopService(Intent(context, WikallVpnService::class.java))
+        }
+    }
+
     fun stop() {
         generation++
         lanAttempt++
@@ -946,7 +954,7 @@ internal class ConnectionController @Inject constructor(
         stopPeerDiscovery()
         masterAnnouncements.close()
         overlayAnnouncement.close()
-        if (hadOverlay) context.stopService(Intent(context, WikallVpnService::class.java))
+        if (hadOverlay) requestOverlayStop()
         unmonitorNetwork()
         directory.detach()
         chat.detach()
@@ -1049,7 +1057,7 @@ internal class ConnectionController @Inject constructor(
                     overlayIp = null
                     overlayAnnouncement.close()
                     runCatching { host?.setOverlayAddress(null) }
-                    context.stopService(Intent(context, WikallVpnService::class.java))
+                    requestOverlayStop()
                     publish(state.value.copy(overlayStatus = "بانتظار شبكة محلية لتشغيل EasyTier.", overlayHealth = null))
                 } else overlayRequest?.takeIf { overlayIp != null }?.let(::refreshOverlayAnnouncements)
                 retry?.let(main::removeCallbacks)

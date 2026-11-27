@@ -30,6 +30,18 @@ class WikallVpnService : VpnService() {
     private var healthTask: Runnable? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            // Android can keep a VpnService bound while its TUN is active.
+            // Explicitly release the native engine and descriptor before stopping.
+            // A queued stop must not tear down a newly requested session.
+            if (controller.overlayRequest == null) {
+                android.util.Log.i(LOG_TAG, "vpn_stop_requested")
+                tearDown()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf(startId)
+            }
+            return START_NOT_STICKY
+        }
         val notifications = getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel(CHANNEL, "شبكة WiKall", NotificationManager.IMPORTANCE_LOW))
         val openApp = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -43,6 +55,8 @@ class WikallVpnService : VpnService() {
 
         val request = controller.overlayRequest
         if (request == null) {
+            tearDown()
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -76,10 +90,17 @@ class WikallVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        stopSelf()
+        main.post {
+            val request = current
+            tearDown()
+            if (request != null) controller.overlayChanged(request, null)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
+        android.util.Log.i(LOG_TAG, "vpn_service_destroyed")
         val request = current
         tearDown()
         if (request != null) controller.overlayChanged(request, null)
@@ -180,7 +201,10 @@ class WikallVpnService : VpnService() {
     }
 
     private fun closeTunnel() {
-        runCatching { tunnel?.close() }
+        val descriptor = tunnel
+        runCatching { descriptor?.close() }
+            .onFailure { android.util.Log.w(LOG_TAG, "android_tun_close_failed") }
+        if (descriptor != null) android.util.Log.i(LOG_TAG, "android_tun_close_requested")
         tunnel = null
         attachedPlan = null
     }
@@ -212,8 +236,9 @@ class WikallVpnService : VpnService() {
         current = null
     }
 
-    private companion object {
-        const val LOG_TAG = "WiKallVpn"
+    companion object {
+        internal const val ACTION_STOP = "com.mokasas.wikall.action.STOP_LOCAL_VPN"
+        private const val LOG_TAG = "WiKallVpn"
         const val CHANNEL = "wikall-overlay"
         const val NOTIFICATION_ID = 703
         const val HEALTH_INTERVAL_MS = 5_000L
