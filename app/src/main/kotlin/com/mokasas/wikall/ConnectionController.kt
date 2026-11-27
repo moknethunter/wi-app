@@ -84,6 +84,7 @@ internal class ConnectionController @Inject constructor(
     private val directory = DirectorySessionManager(store)
     private var monitoring = false
     private var topology: List<String>? = null
+    private var physicalLinkRevision = 0L
     private val recovery = RecoveryManager(main)
     private var hotspotPoll: Runnable? = null
     private val networkMonitor = NetworkStateMonitor(context)
@@ -387,27 +388,32 @@ internal class ConnectionController @Inject constructor(
             android.util.Log.i("WiKallVpn", "overlay_waiting_for_permission")
             return
         }
-        val addresses = physicalAddresses()
-        if (addresses.isEmpty()) {
+        val links = overlayLinks(preferredPeer = null)
+        if (links == null) {
             android.util.Log.i("WiKallVpn", "overlay_waiting_for_physical_link")
             return
         }
-        val peers = discoveredOverlayPeers.filter { networkMonitor.routes(it, null).isNotEmpty() }.sorted()
-        openOverlay(OverlayRequest(pin, overlayCredentials.current().first, HOST_NUMBER, null,
-            extraPeers = peers, listenerAddresses = addresses.sorted()))
+        openOverlay(OverlayRequest(
+            pin, overlayCredentials.current().first, HOST_NUMBER, links.preferredPeer,
+            links.otherPeers, links.listeners, physicalLinkRevision,
+        ))
     }
 
     private fun syncClientOverlay(saved: SavedConnection, detected: String?) {
         val secret = saved.activation.overlaySecret ?: return
         if (android.net.VpnService.prepare(context) != null) return
         if (detected != null && !overlayAddress(detected)) overlayPeer = detected
-        val address = overlayPeer ?: saved.activation.address
-        val listeners = physicalAddresses()
-        if (listeners.isEmpty()) return
-        val peer = address?.takeIf { networkMonitor.routes(it, null).isNotEmpty() }
-        val peers = discoveredOverlayPeers.filter { it != peer && networkMonitor.routes(it, null).isNotEmpty() }.sorted()
-        openOverlay(OverlayRequest(saved.pin, secret, saved.activation.number, peer, peers, listenerAddresses = listeners.sorted()))
+        val links = overlayLinks(overlayPeer ?: saved.activation.address) ?: return
+        openOverlay(OverlayRequest(
+            saved.pin, secret, saved.activation.number, links.preferredPeer,
+            links.otherPeers, links.listeners, physicalLinkRevision,
+        ))
     }
+
+    private fun overlayLinks(preferredPeer: String?): OverlayLinkPlan? =
+        OverlayLinkPlan.select(physicalAddresses(), preferredPeer, discoveredOverlayPeers) {
+            networkMonitor.routes(it, null).isNotEmpty()
+        }
 
     private fun openOverlay(request: OverlayRequest) {
         val unchanged = overlayRequest == request
@@ -1015,7 +1021,9 @@ internal class ConnectionController @Inject constructor(
     }
 
     private fun monitorNetwork(serveHotspot: Boolean = false) {
-        topology = currentTopology()
+        val updated = currentTopology()
+        if (topology != updated) physicalLinkRevision++
+        topology = updated
         monitoring = true
         runCatching { networkMonitor.start(::scheduleNetworkCheck) }
         scheduleHotspotCheck()
@@ -1051,6 +1059,7 @@ internal class ConnectionController @Inject constructor(
                 val updated = currentTopology()
                 topology = updated
                 if (updated == previous) return@schedule
+                physicalLinkRevision++
                 stopPeerDiscovery()
                 if (physicalAddresses().isEmpty() && overlayRequest != null) {
                     overlayRequest = null

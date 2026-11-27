@@ -9,7 +9,15 @@ internal const val OVERLAY_PREFIX = 22
 internal const val OVERLAY_HOST = "10.126.124.1"
 internal const val OVERLAY_INSTANCE = "wikall"
 
-internal data class OverlayRequest(val pin: String, val secret: String, val number: String, val peer: String?, val extraPeers: List<String> = emptyList(), val listenerAddresses: List<String> = emptyList()) {
+internal data class OverlayRequest(
+    val pin: String,
+    val secret: String,
+    val number: String,
+    val peer: String?,
+    val extraPeers: List<String> = emptyList(),
+    val listenerAddresses: List<String> = emptyList(),
+    val physicalLinkRevision: Long = 0,
+) {
     init {
         require(pin.length == 64 && pin.all { it in '0'..'9' || it in 'A'..'F' })
         require(validNonce(secret))

@@ -65,7 +65,8 @@ class WikallVpnService : VpnService() {
     private fun startSession(request: OverlayRequest, command: Long, allowTunnelReuse: Boolean = true) {
         val previous = current
         val keepTunnel = allowTunnelReuse && previous != null && previous.pin == request.pin &&
-            previous.number == request.number && previous.secret == request.secret && tunnel != null
+            previous.number == request.number && previous.secret == request.secret &&
+            previous.physicalLinkRevision == request.physicalLinkRevision && tunnel != null
         val stopped = if (keepTunnel) stopEngine() else tearDown()
         if (!lifecycle.isCurrent(command)) return
         if (!stopped) {
