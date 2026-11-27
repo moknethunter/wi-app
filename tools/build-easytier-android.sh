@@ -10,12 +10,15 @@ case "$abi" in
     *) echo "Unsupported ABI: $abi" >&2; exit 1 ;;
 esac
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_dir="$(mktemp -d)"
 trap 'rm -rf "$source_dir"' EXIT
 git -C "$source_dir" init -q
 git -C "$source_dir" fetch --depth 1 https://github.com/EasyTier/EasyTier.git refs/tags/v2.6.4
 git -C "$source_dir" checkout --detach FETCH_HEAD
 test "$(git -C "$source_dir" rev-parse HEAD)" = 8428a89d2dabc94c97d370ec607c6ca142473626
+
+python3 "$script_dir/apply-easytier-android-patches.py" "$source_dir"
 
 cd "$source_dir"
 rustup target add "$target"

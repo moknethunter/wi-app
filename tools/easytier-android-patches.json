@@ -1,0 +1,42 @@
+[
+  {
+    "path": "easytier/src/instance_manager.rs",
+    "old": "            if let Ok(info) = instance.get_running_info().await {\n                ret.insert(*instance.key(), info);\n            }",
+    "new": "            match instance.get_running_info().await {\n                Ok(info) => { ret.insert(*instance.key(), info); }\n                Err(err) => {\n                    // Preserve named instances without inventing address or route evidence.\n                    let running = instance.is_easytier_running();\n                    let category = if running {\n                        match err.to_string().as_str() {\n                            \"wikall_snapshot_api_pending\" => \"wikall_snapshot_api_pending\",\n                            \"wikall_snapshot_peer_query\" => \"wikall_snapshot_peer_query\",\n                            \"wikall_snapshot_node_query\" => \"wikall_snapshot_node_query\",\n                            \"wikall_snapshot_route_query\" => \"wikall_snapshot_route_query\",\n                            \"wikall_snapshot_portal_query\" => \"wikall_snapshot_portal_query\",\n                            \"wikall_snapshot_foreign_query\" => \"wikall_snapshot_foreign_query\",\n                            _ => \"wikall_snapshot_unavailable\",\n                        }\n                    } else {\n                        match instance.get_latest_error_msg() {\n                            Some(message) => {\n                                let lower = message.to_ascii_lowercase();\n                                if lower.contains(\"permission denied\") || lower.contains(\"operation not permitted\") {\n                                    \"wikall_stopped_permission_denied\"\n                                } else if lower.contains(\"address already in use\") {\n                                    \"wikall_stopped_address_in_use\"\n                                } else if lower.contains(\"network is unreachable\") || lower.contains(\"no route to host\") {\n                                    \"wikall_stopped_network_unreachable\"\n                                } else {\n                                    \"wikall_stopped_other\"\n                                }\n                            }\n                            None => \"wikall_stopped_no_detail\",\n                        }\n                    };\n                    ret.insert(*instance.key(), NetworkInstanceRunningInfo {\n                        running,\n                        error_msg: Some(category.to_owned()),\n                        ..Default::default()\n                    });\n                }\n            }"
+  },
+  {
+    "path": "easytier/src/launcher.rs",
+    "old": "            anyhow::anyhow!(\"failed to get api service, instance may not be running\")",
+    "new": "            anyhow::anyhow!(\"wikall_snapshot_api_pending\")"
+  },
+  {
+    "path": "easytier/src/launcher.rs",
+    "old": "            .list_peer(ctrl.clone(), api::instance::ListPeerRequest::default())\n            .await?\n            .peer_infos;",
+    "new": "            .list_peer(ctrl.clone(), api::instance::ListPeerRequest::default())\n            .await.context(\"wikall_snapshot_peer_query\")?\n            .peer_infos;"
+  },
+  {
+    "path": "easytier/src/launcher.rs",
+    "old": "            .show_node_info(ctrl.clone(), api::instance::ShowNodeInfoRequest::default())\n            .await?\n            .node_info\n            .ok_or_else(|| anyhow::anyhow!(\"failed to get my node info\"))?;",
+    "new": "            .show_node_info(ctrl.clone(), api::instance::ShowNodeInfoRequest::default())\n            .await.context(\"wikall_snapshot_node_query\")?\n            .node_info\n            .ok_or_else(|| anyhow::anyhow!(\"wikall_snapshot_node_query\"))?;"
+  },
+  {
+    "path": "easytier/src/launcher.rs",
+    "old": "        let vpn_portal_cfg = api_service\n            .get_vpn_portal_service()\n            .get_vpn_portal_info(\n                ctrl.clone(),\n                api::instance::GetVpnPortalInfoRequest::default(),\n            )\n            .await?\n            .vpn_portal_info\n            .map(|i| i.client_config);",
+    "new": "        // An unconfigured portal must not block status reporting on a local node.\n        let vpn_portal_cfg = if self.config.get_vpn_portal_config().is_some() {\n            api_service\n                .get_vpn_portal_service()\n                .get_vpn_portal_info(\n                    ctrl.clone(),\n                    api::instance::GetVpnPortalInfoRequest::default(),\n                )\n                .await.context(\"wikall_snapshot_portal_query\")?\n                .vpn_portal_info\n                .map(|i| i.client_config)\n        } else {\n            None\n        };"
+  },
+  {
+    "path": "easytier/src/launcher.rs",
+    "old": "            .list_route(ctrl.clone(), api::instance::ListRouteRequest::default())\n            .await?\n            .routes;",
+    "new": "            .list_route(ctrl.clone(), api::instance::ListRouteRequest::default())\n            .await.context(\"wikall_snapshot_route_query\")?\n            .routes;"
+  },
+  {
+    "path": "easytier/src/launcher.rs",
+    "old": "            .await?\n            .summary;\n        let dev_name = api_service\n            .get_config_service()\n            .get_config(ctrl.clone(), api::config::GetConfigRequest::default())\n            .await?\n            .config\n            .ok_or_else(|| anyhow::anyhow!(\"failed to get config\"))?\n            .dev_name\n            .unwrap_or_else(|| \"\".to_string());",
+    "new": "            .await.context(\"wikall_snapshot_foreign_query\")?\n            .summary;\n        // This is the configured name, not evidence of TUN establishment.\n        let dev_name = self.config.get_flags().dev_name;"
+  },
+  {
+    "path": "easytier-contrib/easytier-android-jni/src/lib.rs",
+    "old": "        // 使用 serde_json 构建 JSON\n        for info in infos.iter().take(count as usize) {\n            let key_ptr = info.key;\n            let val_ptr = info.value;\n            if key_ptr.is_null() || val_ptr.is_null() {\n                break;\n            }\n\n            let key = CStr::from_ptr(key_ptr).to_string_lossy();\n            let val = CStr::from_ptr(val_ptr).to_string_lossy();",
+    "new": "        // FFI transfers ownership of C strings. Free all before JSON decoding.\n        let entries: Vec<(String, String)> = infos.iter().take(count as usize)\n            .filter_map(|info| {\n                let key = if info.key.is_null() { None } else {\n                    let value = CStr::from_ptr(info.key).to_string_lossy().into_owned();\n                    free_string(info.key);\n                    Some(value)\n                };\n                let val = if info.value.is_null() { None } else {\n                    let value = CStr::from_ptr(info.value).to_string_lossy().into_owned();\n                    free_string(info.value);\n                    Some(value)\n                };\n                key.zip(val)\n            }).collect();\n        for (key, val) in entries {"
+  }
+]

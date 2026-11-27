@@ -4,27 +4,27 @@ import com.easytier.jni.EasyTierJNI
 import org.json.JSONObject
 
 /** Native control boundary. A running engine is NOT proof of peer connectivity. */
-internal class EasyTierEngine {
+internal class EasyTierEngine : OverlayEngine {
     @Synchronized
-    fun start(configuration: String) {
+    override fun start(configuration: String) {
         check(EasyTierJNI.parseConfig(configuration) == 0) { "EasyTier config rejected" }
         check(EasyTierJNI.runNetworkInstance(configuration) == 0) { "EasyTier start failed" }
     }
 
     @Synchronized
-    fun attachTun(instance: String, fd: Int) {
+    override fun attachTun(instance: String, fd: Int) {
         require(fd >= 0)
         check(EasyTierJNI.setTunFd(instance, fd) == 0) { "EasyTier TUN attach failed" }
     }
 
     @Synchronized
-    fun stopAll() {
+    override fun stopAll() {
         check(EasyTierJNI.retainNetworkInstance(null) == 0) { "EasyTier stop failed" }
     }
 
     /** Call from a worker thread. Missing data is unknown, never fake success. */
     @Synchronized
-    fun snapshot(instance: String): EasyTierSnapshot? =
+    override fun snapshot(instance: String): EasyTierSnapshot? =
         EasyTierJNI.collectNetworkInfos()?.let { decodeEasyTierSnapshot(it, instance) }
 }
 
@@ -40,6 +40,15 @@ internal data class EasyTierSnapshot(
 
 internal fun decodeEasyTierSnapshot(json: String, instance: String): EasyTierSnapshot? {
     val info = JSONObject(json).optJSONObject("map")?.optJSONObject(instance) ?: return null
+    val rawError = info.opt("error_msg") as? String ?: info.opt("errorMsg") as? String
+    val category = nativeFailureCategory(rawError)
+    // Incomplete diagnostics must not turn protobuf defaults into observed empty networks.
+    if (rawError?.startsWith("wikall_snapshot_") == true) {
+        return EasyTierSnapshot(null, null, null, null, null, failureCategory = category)
+    }
+    if (rawError?.startsWith("wikall_stopped_") == true) {
+        return EasyTierSnapshot(false, null, null, null, null, failureCategory = category)
+    }
     val node = info.optJSONObject("my_node_info") ?: info.optJSONObject("myNodeInfo")
     val inet = node?.optJSONObject("virtual_ipv4") ?: node?.optJSONObject("virtualIpv4")
     val ip = decodeNativeIpv4(inet)
@@ -49,7 +58,7 @@ internal fun decodeEasyTierSnapshot(json: String, instance: String): EasyTierSna
         info.opt("running") as? Boolean,
         ip, prefix, info.optJSONArray("peers")?.length(), info.optJSONArray("routes")?.length(),
         decodeNativeRoutes(info),
-        nativeFailureCategory(info.opt("error_msg") as? String ?: info.opt("errorMsg") as? String),
+        category,
     )
 }
 
@@ -85,6 +94,12 @@ private fun decodeNativeRoutes(info: JSONObject): List<NativeRoute>? {
 internal fun nativeFailureCategory(message: String?): String? {
     val error = message?.takeIf { it.isNotBlank() }?.lowercase() ?: return null
     return when {
+        error in setOf("wikall_snapshot_api_pending", "wikall_snapshot_peer_query",
+            "wikall_snapshot_node_query", "wikall_snapshot_route_query",
+            "wikall_snapshot_portal_query", "wikall_snapshot_foreign_query",
+            "wikall_snapshot_unavailable", "wikall_stopped_permission_denied",
+            "wikall_stopped_address_in_use", "wikall_stopped_network_unreachable",
+            "wikall_stopped_other", "wikall_stopped_no_detail") -> error
         "permission denied" in error || "operation not permitted" in error -> "permission_denied"
         "address already in use" in error -> "address_in_use"
         "network is unreachable" in error || "no route to host" in error -> "network_unreachable"

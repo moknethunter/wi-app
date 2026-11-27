@@ -23,7 +23,7 @@ class WikallVpnService : VpnService() {
     private var attachedPlan: VirtualAddressPlan? = null
     private var addressDeadline = 0L
     private var unknownSamples = 0
-    private val engine = EasyTierEngine()
+    private val engine: OverlayEngine = EasyTierEngine()
     private val main = Handler(Looper.getMainLooper())
     private val diagnostics = Executors.newSingleThreadExecutor()
     private var healthGeneration = 0L
@@ -135,7 +135,7 @@ class WikallVpnService : VpnService() {
             if (addressDeadline == 0L) addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
             if (SystemClock.elapsedRealtime() >= addressDeadline) {
                 android.util.Log.w(LOG_TAG, if (snapshot == null) "native_instance_not_reported"
-                    else if (snapshot.address == null) "native_address_not_reported"
+                    else if (snapshot.address == null) "native_address_not_reported category=${snapshot.failureCategory ?: "none"}"
                     else "native_address_policy_rejected prefix=${snapshot.prefix} running=${snapshot.running}")
                 failRequest(request)
             } else {
