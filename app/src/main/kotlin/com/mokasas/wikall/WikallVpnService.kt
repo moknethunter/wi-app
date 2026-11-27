@@ -23,7 +23,7 @@ class WikallVpnService : VpnService() {
     private var attachedPlan: VirtualAddressPlan? = null
     private var addressDeadline = 0L
     private var unknownSamples = 0
-    private val engine: OverlayEngine = EasyTierEngine()
+    @Inject internal lateinit var engine: OverlayEngine
     private val main = Handler(Looper.getMainLooper())
     private val diagnostics = Executors.newSingleThreadExecutor()
     private var healthGeneration = 0L
@@ -58,7 +58,7 @@ class WikallVpnService : VpnService() {
             check(!NetworkStateMonitor(this).overlayConflictsWithLocalSubnet()) {
                 "local_subnet_conflict"
             }
-            engine.start(request.configuration())
+            engine.start(request)
             engineStarted = true
             android.util.Log.i(LOG_TAG, "native_start_requested")
         }.onFailure {

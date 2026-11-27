@@ -1,14 +1,14 @@
 package com.mokasas.wikall
 
 /**
- * Application-owned native engine port, independent of Android UI and services.
- * Calls are synchronous; implementations serialize operations.
- * Start is a request, not proof of readiness. Null means unavailable telemetry.
- * The caller owns the TUN descriptor and keeps it alive while attached.
+ * Application-owned overlay port, independent of Android UI, JNI and TOML.
+ * Implementations serialize synchronous operations. Start is a request, not
+ * proof of readiness. Null means unavailable telemetry. The caller owns the
+ * TUN descriptor while attached. Stop affects the entire engine registry.
  */
 internal interface OverlayEngine {
-    fun start(configuration: String)
+    fun start(request: OverlayRequest, instance: String = OVERLAY_INSTANCE)
     fun attachTun(instance: String, fd: Int)
     fun stopAll()
-    fun snapshot(instance: String): EasyTierSnapshot?
+    fun snapshot(instance: String): OverlaySnapshot?
 }

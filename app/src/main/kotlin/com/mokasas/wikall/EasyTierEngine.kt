@@ -1,42 +1,55 @@
 package com.mokasas.wikall
 
-import com.easytier.jni.EasyTierJNI
 import org.json.JSONObject
 
-/** Native control boundary. A running engine is NOT proof of peer connectivity. */
-internal class EasyTierEngine : OverlayEngine {
-    @Synchronized
-    override fun start(configuration: String) {
-        check(EasyTierJNI.parseConfig(configuration) == 0) { "EasyTier config rejected" }
-        check(EasyTierJNI.runNetworkInstance(configuration) == 0) { "EasyTier start failed" }
+/**
+ * Real adapter to the process-global EasyTier registry. Every wrapper, including
+ * test fixtures, shares a lock because JNI does not own independent registries.
+ * Blocking operations still require a suitable caller thread.
+ */
+internal class EasyTierEngine(
+    private val native: EasyTierNativeControl = JniEasyTierControl,
+) : OverlayEngine {
+    override fun start(request: OverlayRequest, instance: String) =
+        start(request.configuration(instance))
+
+    /** Native instrumentation fixtures use explicit loopback configurations. */
+    internal fun start(configuration: String): Unit = synchronized(nativeLock) {
+        checked("config_rejected") { native.parse(configuration) }
+        checked("start_failed") { native.start(configuration) }
     }
 
-    @Synchronized
-    override fun attachTun(instance: String, fd: Int) {
+    override fun attachTun(instance: String, fd: Int): Unit = synchronized(nativeLock) {
         require(fd >= 0)
-        check(EasyTierJNI.setTunFd(instance, fd) == 0) { "EasyTier TUN attach failed" }
+        checked("attach_failed") { native.attach(instance, fd) }
     }
 
-    @Synchronized
-    override fun stopAll() {
-        check(EasyTierJNI.retainNetworkInstance(null) == 0) { "EasyTier stop failed" }
+    override fun stopAll(): Unit = synchronized(nativeLock) {
+        checked("stop_failed") { native.stopAll() }
     }
 
-    /** Call from a worker thread. Missing data is unknown, never fake success. */
-    @Synchronized
-    override fun snapshot(instance: String): EasyTierSnapshot? =
-        EasyTierJNI.collectNetworkInfos()?.let { decodeEasyTierSnapshot(it, instance) }
+    override fun snapshot(instance: String): OverlaySnapshot? = synchronized(nativeLock) {
+        try {
+            native.collect()?.let { decodeEasyTierSnapshot(it, instance) }
+        } catch (failure: Exception) {
+            throw IllegalStateException(nativeFailureCategory(failure.message) ?: "snapshot_failed")
+        }
+    }
+
+    private fun checked(operation: String, invoke: () -> Int) {
+        val result = try {
+            invoke()
+        } catch (failure: Exception) {
+            // JNI errors may include an entire TOML configuration. No raw cause.
+            throw IllegalStateException(nativeFailureCategory(failure.message) ?: operation)
+        }
+        check(result == 0) { operation }
+    }
+
+    private companion object {
+        val nativeLock = Any()
+    }
 }
-
-internal data class EasyTierSnapshot(
-    val running: Boolean?,
-    val address: String?,
-    val prefix: Int?,
-    val peers: Int?,
-    val routes: Int?,
-    val routeDetails: List<NativeRoute>? = null,
-    val failureCategory: String? = null,
-)
 
 internal fun decodeEasyTierSnapshot(json: String, instance: String): EasyTierSnapshot? {
     val info = JSONObject(json).optJSONObject("map")?.optJSONObject(instance) ?: return null
