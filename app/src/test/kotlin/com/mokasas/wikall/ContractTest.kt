@@ -99,6 +99,15 @@ class ContractTest {
         }
     }
 
+    @Test fun nativeProfileUsesExactInstanceNameKeyAndSupportsDistinctNames() {
+        val request = OverlayRequest("A".repeat(64), "X".repeat(32), HOST_NUMBER, null)
+        assertEquals("instance_name = \"$OVERLAY_INSTANCE\"", request.configuration().lineSequence().first())
+        assertEquals("instance_name = \"node-a\"", request.configuration("node-a").lineSequence().first())
+        assertEquals("instance_name = \"node-b\"", request.configuration("node-b").lineSequence().first())
+        assertFalse(request.configuration().lineSequence().any { it.startsWith("inst_name =") })
+        assertThrows(IllegalArgumentException::class.java) { request.configuration("bad\"name") }
+    }
+
     @Test fun localOverlayHasNoRendezvousOrDefaultRoute() {
         val profile = OverlayRequest("A".repeat(64), "X".repeat(32), "99001", "192.168.1.3",
             listenerAddresses = listOf("192.168.1.2")).configuration()

@@ -7,6 +7,7 @@ internal data class OverlayHealth(
     val state: OverlayHealthState,
     val peers: Int? = null,
     val routes: Int? = null,
+    val relayTopology: RelayTopology? = null,
 )
 
 internal fun assessOverlayHealth(snapshot: EasyTierSnapshot?, address: String, prefix: Int): OverlayHealth {
@@ -19,7 +20,7 @@ internal fun assessOverlayHealth(snapshot: EasyTierSnapshot?, address: String, p
         snapshot.peers == 0 -> OverlayHealthState.NO_PEERS
         else -> OverlayHealthState.PEERS_REPORTED
     }
-    return OverlayHealth(state, snapshot.peers, snapshot.routes)
+    return OverlayHealth(state, snapshot.peers, snapshot.routes, summarizeRelayTopology(snapshot.routeDetails))
 }
 
 /** Fast initial discovery, then low-frequency retry while idle; no unbounded exponential growth. */

@@ -21,17 +21,24 @@ internal class LanDiscovery(
     private var discovery: NsdManager.DiscoveryListener? = null
     private var discoveryTimeout: Runnable? = null
 
-    fun advertise(pin: String, network: Network? = null, attributes: Map<String, String> = emptyMap()) {
+    fun advertise(pin: String, network: Network? = null, attributes: Map<String, String> = emptyMap(),
+        onPublished: (Boolean) -> Unit = {},
+    ) {
         close()
         val listener = object : NsdManager.RegistrationListener {
-            override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) = Unit
+            override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
+                main.post { if (registration === this) onPublished(false) }
+            }
             override fun onUnregistrationFailed(info: NsdServiceInfo, code: Int) = Unit
             override fun onServiceRegistered(info: NsdServiceInfo) {
                 main.post {
                     if (registration !== this) runCatching { manager.unregisterService(this) }
+                    else onPublished(true)
                 }
             }
-            override fun onServiceUnregistered(info: NsdServiceInfo) = Unit
+            override fun onServiceUnregistered(info: NsdServiceInfo) {
+                main.post { if (registration === this) onPublished(false) }
+            }
         }
         registration = listener
         val info = NsdServiceInfo().apply {
@@ -43,6 +50,7 @@ internal class LanDiscovery(
             if (Build.VERSION.SDK_INT >= 33 && network != null) this.network = network
         }
         runCatching { manager.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener) }
+            .onFailure { main.post { if (registration === listener) onPublished(false) } }
     }
 
     fun find(pin: String, result: (String?) -> Unit) {

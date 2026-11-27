@@ -1,0 +1,34 @@
+package com.mokasas.wikall
+
+/** EasyTier-specific TOML serialization. The request itself is engine independent. */
+internal fun OverlayRequest.configuration(instanceName: String = OVERLAY_INSTANCE) = buildString {
+    require(instanceName.matches(Regex("[a-zA-Z0-9_-]{1,64}")))
+    // EasyTier v2.6.4 TomlConfigLoader expects instance_name, not inst_name.
+    appendLine("instance_name = \"$instanceName\"")
+    seedAddress?.let { appendLine("ipv4 = \"$it/$OVERLAY_PREFIX\"") }
+        ?: appendLine("dhcp = true")
+    val listeners = listenerAddresses.ifEmpty { listOf("0.0.0.0") }
+        .joinToString(", ") { "\"udp://$it:$OVERLAY_PORT\"" }
+    appendLine("listeners = [$listeners]")
+    appendLine("stun_servers = []")
+    appendLine("stun_servers_v6 = []")
+    appendLine("[network_identity]")
+    appendLine("network_name = \"WiKall-${pin.take(24)}\"")
+    appendLine("network_secret = \"$secret\"")
+    appendLine("[flags]")
+    appendLine("private_mode = true")
+    appendLine("enable_encryption = true")
+    appendLine("disable_upnp = true")
+    appendLine("p2p_only = false")
+    appendLine("disable_relay_data = false")
+    appendLine("relay_network_whitelist = \"WiKall-${pin.take(24)}\"")
+    appendLine("enable_exit_node = false")
+    appendLine("enable_ipv6 = false")
+    appendLine("accept_dns = false")
+    appendLine("disable_udp_hole_punching = true")
+    appendLine("disable_tcp_hole_punching = true")
+    (listOfNotNull(peer) + extraPeers).distinct().forEach { endpoint ->
+        appendLine("[[peer]]")
+        appendLine("uri = \"udp://$endpoint:$OVERLAY_PORT\"")
+    }
+}

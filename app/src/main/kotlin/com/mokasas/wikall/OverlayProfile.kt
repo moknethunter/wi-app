@@ -21,30 +21,9 @@ internal data class OverlayRequest(val pin: String, val secret: String, val numb
     // Only the directory owner seeds the current realm. Clients never derive IP from number.
     val seedAddress: String? get() = OVERLAY_HOST.takeIf { number == HOST_NUMBER }
 
-    fun configuration() = buildString {
-        appendLine("inst_name = \"$OVERLAY_INSTANCE\"")
-        seedAddress?.let { appendLine("ipv4 = \"$it/$OVERLAY_PREFIX\"") }
-            ?: appendLine("dhcp = true")
-        val listeners = listenerAddresses.ifEmpty { listOf("0.0.0.0") }
-            .joinToString(", ") { "\"udp://$it:$OVERLAY_PORT\"" }
-        appendLine("listeners = [$listeners]")
-        appendLine("stun_servers = []")
-        appendLine("stun_servers_v6 = []")
-        appendLine("[network_identity]")
-        appendLine("network_name = \"WiKall-${pin.take(24)}\"")
-        appendLine("network_secret = \"$secret\"")
-        appendLine("[flags]")
-        appendLine("private_mode = true")
-        appendLine("enable_exit_node = false")
-        appendLine("enable_ipv6 = false")
-        appendLine("accept_dns = false")
-        appendLine("disable_udp_hole_punching = true")
-        appendLine("disable_tcp_hole_punching = true")
-        (listOfNotNull(peer) + extraPeers).distinct().forEach { endpoint ->
-            appendLine("[[peer]]")
-            appendLine("uri = \"udp://$endpoint:$OVERLAY_PORT\"")
-        }
-    }
+    // The configuration carries a realm secret. Never expose it via generated data-class toString.
+    override fun toString(): String = "OverlayRequest(redacted)"
+
 }
 
 internal fun overlayAddress(address: String): Boolean {

@@ -44,7 +44,12 @@ class AndroidVpnLifecycleTest {
             while (SystemClock.elapsedRealtime() < deadline && hasWiKallRoute() != active) {
                 SystemClock.sleep(100)
             }
-            assertTrue("Expected WiKall TUN active=$active", hasWiKallRoute() == active)
+            val observed = hasWiKallRoute()
+            val vpnCount = connectivity.allNetworks.count { network ->
+                connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+            }
+            android.util.Log.i("WiKallNativeTest", "TUN expected=$active observed=$observed vpn_count=$vpnCount")
+            assertTrue("Expected WiKall TUN active=$active, observed=$observed, visible VPNs=$vpnCount", observed == active)
         }
 
         if (changedAppOp) setVpnAppOp("allow")

@@ -109,7 +109,8 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: env -u GRADLE_HOME ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest
+          script: |
+            bash -c 'set +e; env -u GRADLE_HOME ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:connectedDebugAndroidTest; result=$?; adb logcat -d -s WiKallVpn:I WiKallNativeTest:I || true; exit "$result"'
 
       - name: Assemble the verified APK
         run: env -u GRADLE_HOME ./gradlew --no-daemon :assembleDebug

@@ -431,6 +431,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (session.overlayStatus.isNotBlank()) Text(session.overlayStatus)
+            if (session.number != null) {
+                Text(if (session.publishedOverlayLinks > 0)
+                    "إعلان العقدة منشور على ${session.publishedOverlayLinks} وصلة محلية"
+                else "لم يؤكد النظام نشر إعلان العقدة بعد")
+            }
             session.overlayHealth?.let { health ->
                 Panel("فحص الشبكة التراكبية") {
                     Text(when (health.state) {
@@ -443,6 +448,12 @@ class MainActivity : ComponentActivity() {
                     })
                     health.peers?.let { Text("العقد المعلنة: $it") }
                     health.routes?.let { Text("المسارات المعلنة: $it") }
+                    health.relayTopology?.let { topology ->
+                        Text("مسارات مباشرة: ${topology.directRoutes}")
+                        Text("مسارات عبر وسيط: ${topology.relayedRoutes}")
+                        Text("عقد وسيطة ظاهرة: ${topology.intermediatePeers}")
+                    } ?: Text("تفاصيل الترحيل غير متاحة من المحرك.")
+                    Text("المسارات المعلنة ليست اختبارًا لوصول الصوت.")
                 }
             }
             if (session.callId == null && session.number != null) {

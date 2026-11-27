@@ -23,13 +23,25 @@ class WikallVpnService : VpnService() {
     private var attachedPlan: VirtualAddressPlan? = null
     private var addressDeadline = 0L
     private var unknownSamples = 0
-    private val engine = EasyTierEngine()
+    @Inject internal lateinit var engine: OverlayEngine
     private val main = Handler(Looper.getMainLooper())
     private val diagnostics = Executors.newSingleThreadExecutor()
     private var healthGeneration = 0L
     private var healthTask: Runnable? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            // Android can keep a VpnService bound while its TUN is active.
+            // Explicitly release the native engine and descriptor before stopping.
+            // A queued stop must not tear down a newly requested session.
+            if (controller.overlayRequest == null) {
+                android.util.Log.i(LOG_TAG, "vpn_stop_requested")
+                tearDown()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf(startId)
+            }
+            return START_NOT_STICKY
+        }
         val notifications = getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel(CHANNEL, "شبكة WiKall", NotificationManager.IMPORTANCE_LOW))
         val openApp = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -43,6 +55,8 @@ class WikallVpnService : VpnService() {
 
         val request = controller.overlayRequest
         if (request == null) {
+            tearDown()
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -55,9 +69,16 @@ class WikallVpnService : VpnService() {
         current = request
         controller.overlayAwaitingAddress(request)
         val started = runCatching {
-            check(!NetworkStateMonitor(this).overlayConflictsWithLocalSubnet())
-            engine.start(request.configuration())
+            check(!NetworkStateMonitor(this).overlayConflictsWithLocalSubnet()) {
+                "local_subnet_conflict"
+            }
+            engine.start(request)
             engineStarted = true
+            android.util.Log.i(LOG_TAG, "native_start_requested")
+        }.onFailure {
+            val category = if (it.message == "local_subnet_conflict") "local_subnet_conflict"
+                else nativeFailureCategory(it.message) ?: "unknown"
+            android.util.Log.w(LOG_TAG, "native_start_failed category=$category")
         }.isSuccess
         if (started) {
             addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
@@ -69,10 +90,17 @@ class WikallVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        stopSelf()
+        main.post {
+            val request = current
+            tearDown()
+            if (request != null) controller.overlayChanged(request, null)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
+        android.util.Log.i(LOG_TAG, "vpn_service_destroyed")
         val request = current
         tearDown()
         if (request != null) controller.overlayChanged(request, null)
@@ -85,7 +113,8 @@ class WikallVpnService : VpnService() {
             healthTask = null
             if (generation != healthGeneration || current != request || !engineStarted) return@Runnable
             diagnostics.execute {
-                val snapshot = runCatching { engine.snapshot(OVERLAY_INSTANCE) }.getOrNull()
+                val snapshot = runCatching { engine.snapshot(OVERLAY_INSTANCE) }
+                    .onFailure { android.util.Log.w(LOG_TAG, "native_snapshot_failed") }.getOrNull()
                 main.post {
                     if (generation == healthGeneration && current == request && engineStarted &&
                         controller.overlayRequest == request) {
@@ -99,6 +128,7 @@ class WikallVpnService : VpnService() {
     private fun applySnapshot(request: OverlayRequest, generation: Long, snapshot: EasyTierSnapshot?) {
         val plan = nativeAddressPlan(snapshot, request)
         if (snapshot?.running == false) {
+            android.util.Log.w(LOG_TAG, "native_instance_stopped category=${snapshot.failureCategory ?: "unknown"}")
             failRequest(request)
             return
         }
@@ -114,8 +144,20 @@ class WikallVpnService : VpnService() {
                 closeTunnel()
                 controller.overlayAwaitingAddress(request)
             }
+            // A provisioned mobile Node can listen/advertise without a virtual IP.
+            // EasyTier DHCP waits for peers. Do not kill a healthy engine just because
+            // the phone is temporarily alone; do not claim the TUN is ready either.
+            if (mayRemainBootstrapNode(request, snapshot)) {
+                controller.overlayListeningWithoutAddress(request)
+                addressDeadline = 0L
+                scheduleHealth(request, generation, HEALTH_INTERVAL_MS)
+                return
+            }
             if (addressDeadline == 0L) addressDeadline = SystemClock.elapsedRealtime() + ADDRESS_TIMEOUT_MS
             if (SystemClock.elapsedRealtime() >= addressDeadline) {
+                android.util.Log.w(LOG_TAG, if (snapshot == null) "native_instance_not_reported"
+                    else if (snapshot.address == null) "native_address_not_reported category=${snapshot.failureCategory ?: "none"}"
+                    else "native_address_policy_rejected prefix=${snapshot.prefix} running=${snapshot.running}")
                 failRequest(request)
             } else {
                 scheduleHealth(request, generation, ADDRESS_POLL_MS)
@@ -130,6 +172,7 @@ class WikallVpnService : VpnService() {
                 check(!monitor.overlayConflictsWithLocalSubnet())
                 if (attachedPlan != plan) closeTunnel()
                 val physical = monitor.localLinks().map { it.first }.distinct()
+                android.util.Log.i(LOG_TAG, "native_address_accepted prefix=${plan.prefix} physical_links=${physical.size}")
                 val descriptor = tunnel ?: checkNotNull(Builder()
                     .setSession("WiKall")
                     .setMtu(1280)
@@ -137,9 +180,14 @@ class WikallVpnService : VpnService() {
                     .addRoute(plan.network, plan.prefix)
                     .addAllowedApplication(packageName)
                     .establish()).also { tunnel = it }
-                setUnderlyingNetworks(physical.takeIf { it.isNotEmpty() }?.toTypedArray())
+                android.util.Log.i(LOG_TAG, "android_tun_established")
+                val underlyingAccepted = setUnderlyingNetworks(physical.takeIf { it.isNotEmpty() }?.toTypedArray())
+                android.util.Log.i(LOG_TAG, "underlying_networks_accepted=$underlyingAccepted")
                 engine.attachTun(OVERLAY_INSTANCE, descriptor.fd)
+                android.util.Log.i(LOG_TAG, "native_tun_attach_requested")
                 attachedPlan = plan
+            }.onFailure {
+                android.util.Log.w(LOG_TAG, "tun_establish_or_attach_failed category=${nativeFailureCategory(it.message) ?: "unknown"}")
             }.isSuccess
             if (!attached) {
                 failRequest(request)
@@ -153,7 +201,10 @@ class WikallVpnService : VpnService() {
     }
 
     private fun closeTunnel() {
-        runCatching { tunnel?.close() }
+        val descriptor = tunnel
+        runCatching { descriptor?.close() }
+            .onFailure { android.util.Log.w(LOG_TAG, "android_tun_close_failed") }
+        if (descriptor != null) android.util.Log.i(LOG_TAG, "android_tun_close_requested")
         tunnel = null
         attachedPlan = null
     }
@@ -173,6 +224,7 @@ class WikallVpnService : VpnService() {
     private fun stopEngine() {
         stopHealthPolling()
         if (engineStarted) runCatching { engine.stopAll() }
+            .onFailure { android.util.Log.w(LOG_TAG, "native_stop_failed category=${nativeFailureCategory(it.message) ?: "unknown"}") }
         engineStarted = false
     }
 
@@ -184,7 +236,9 @@ class WikallVpnService : VpnService() {
         current = null
     }
 
-    private companion object {
+    companion object {
+        internal const val ACTION_STOP = "com.mokasas.wikall.action.STOP_LOCAL_VPN"
+        private const val LOG_TAG = "WiKallVpn"
         const val CHANNEL = "wikall-overlay"
         const val NOTIFICATION_ID = 703
         const val HEALTH_INTERVAL_MS = 5_000L
