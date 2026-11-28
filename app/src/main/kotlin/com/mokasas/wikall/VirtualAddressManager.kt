@@ -27,6 +27,7 @@ internal fun overlayDirectoryCandidates(
     routes: List<NativeRoute>?,
     localAddress: String,
     existing: String?,
+    round: Int = 0,
 ): List<String> {
     val reported = routes.orEmpty().groupBy { it.destinationPeer }.values.asSequence()
         .mapNotNull { observations -> observations.distinct().singleOrNull() }
@@ -34,9 +35,15 @@ internal fun overlayDirectoryCandidates(
         .sortedBy { it.cost }
         .mapNotNull { it.address }
         .filter { it != OVERLAY_NETWORK && it != "10.126.127.255" && overlayAddress(it) }
-    return (sequenceOf(OVERLAY_HOST) + reported)
-        .distinct()
-        .filter { it != localAddress && it != existing }
-        .take(4)
+    val legacy = listOf(OVERLAY_HOST).filter { it != localAddress && it != existing }
+    val alternatives = reported.distinct()
+        .filter { it != localAddress && it != existing && it != OVERLAY_HOST }
         .toList()
+    if (alternatives.isEmpty()) return legacy
+
+    val budget = 4 - legacy.size
+    val start = (Math.floorMod(round, alternatives.size) * budget) % alternatives.size
+    return legacy + List(minOf(budget, alternatives.size)) { index ->
+        alternatives[(start + index) % alternatives.size]
+    }
 }
