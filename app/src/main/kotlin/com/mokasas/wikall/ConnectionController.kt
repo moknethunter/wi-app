@@ -100,6 +100,7 @@ internal class ConnectionController @Inject constructor(
     private var probeTimeout: Runnable? = null
     private var retry: Runnable? = null
     private var retryCount = 0
+    private var overlayDirectoryRound = 0
     private var call = CallSessionManager()
     private var voice: VoiceMedia? = null
     private val pendingMedia = ArrayDeque<Signal>()
@@ -349,7 +350,7 @@ internal class ConnectionController @Inject constructor(
         val address = overlayIp ?: return emptyList()
         val request = overlayRequest ?: return emptyList()
         if (request.number == HOST_NUMBER) return emptyList()
-        return overlayDirectoryCandidates(overlayDirectoryRoutes, address, existing)
+        return overlayDirectoryCandidates(overlayDirectoryRoutes, address, existing, overlayDirectoryRound++)
     }
 
     private fun announcementLinks(addresses: Set<String>): Set<Network?> {
@@ -439,6 +440,7 @@ internal class ConnectionController @Inject constructor(
         if (overlayRequest != request) return
         overlayIp = null
         overlayDirectoryRoutes = null
+        overlayDirectoryRound = 0
         runCatching { host?.setOverlayAddress(null) }
         publish(state.value.copy(overlayStatus = "بانتظار تخصيص عنوان النفق المحلي…", overlayHealth = null))
     }
@@ -556,6 +558,7 @@ internal class ConnectionController @Inject constructor(
                     val connected = latest.retainingNewerOverlay(savedClient)
                     savedClient = connected
                     retryCount = 0
+                    overlayDirectoryRound = 0
                     channel = active
                     clientRoute = route
                     publish(state.value.copy(
@@ -969,6 +972,7 @@ internal class ConnectionController @Inject constructor(
         overlayRequest = null
         overlayIp = null
         overlayDirectoryRoutes = null
+        overlayDirectoryRound = 0
         overlayPeer = null
         stopPeerDiscovery()
         masterAnnouncements.close()
@@ -1078,6 +1082,7 @@ internal class ConnectionController @Inject constructor(
                     overlayRequest = null
                     overlayIp = null
                     overlayDirectoryRoutes = null
+                    overlayDirectoryRound = 0
                     overlayAnnouncement.close()
                     runCatching { host?.setOverlayAddress(null) }
                     requestOverlayStop()

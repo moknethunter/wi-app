@@ -41,6 +41,15 @@ class VirtualAddressManagerTest {
         )
     }
 
+    @Test fun discoveryRetriesReachCandidatesBeyondTheFirstBatch() {
+        val peers = (2..11).map { NativeRoute(it.toLong(), 1, "10.126.125.$it", it) }
+        val batches = (0..3).map { round ->
+            overlayDirectoryCandidates(peers, "10.126.126.1", null, round)
+        }
+        assertTrue(batches.all { it.size == 4 && it.first() == OVERLAY_HOST })
+        assertEquals(peers.mapNotNull { it.address }.toSet(), batches.flatten().toSet() - OVERLAY_HOST)
+    }
+
     @Test fun rejectsUnassignedUnsafeConflictingOrUnrelatedAddresses() {
         assertNull(nativeAddressPlan(null, client))
         assertNull(nativeAddressPlan(sample(null), client))
