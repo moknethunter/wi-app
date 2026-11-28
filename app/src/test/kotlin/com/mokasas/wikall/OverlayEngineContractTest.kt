@@ -25,6 +25,10 @@ class OverlayEngineContractTest {
             events += "attach:$instance:$fd"
             return 0
         }
+        override fun setSocketPolicy(policy: OverlaySocketPolicy?): Int {
+            events += if (policy == null) "unregister" else "register"
+            return 0
+        }
         override fun stopAll(): Int {
             events += "stop"
             return 0
@@ -46,6 +50,17 @@ class OverlayEngineContractTest {
         assertEquals(listOf("parse", "start", "attach:contract:12", "stop"), driver.events)
     }
 
+    @Test fun socketPolicyLivesUntilTheNativeRegistryStops() {
+        val driver = RecordingNative()
+        val engine: OverlayEngine = EasyTierEngine(driver)
+        try {
+            engine.start(request(), socketPolicy = OverlaySocketPolicy { _, _ -> -1 })
+        } finally {
+            engine.stopAll()
+        }
+        assertEquals(listOf("parse", "register", "start", "stop", "unregister"), driver.events)
+    }
+
     @Test fun rejectedConfigurationNeverStartsNativeEngine() {
         val driver = RecordingNative().apply { parseResult = -1 }
         val engine: OverlayEngine = EasyTierEngine(driver)
@@ -62,6 +77,18 @@ class OverlayEngineContractTest {
         assertEquals("permission_denied", failure.message)
         assertNull(failure.cause)
         assertFalse(request.toString().contains(request.secret))
+    }
+
+    @Test fun onlySameTransportSessionCanReuseItsTun() {
+        val active = request().copy(listenerAddresses = listOf("192.168.1.3"), transportRevision = 7)
+        val retry = active.copy(transportRevision = 8)
+        val newLink = active.copy(listenerAddresses = listOf("172.16.0.2"))
+
+        assertTrue(active.canReuseTunnelFor(active.copy(peer = "192.168.1.5")))
+        assertFalse(active.canReuseTunnelFor(retry))
+        assertFalse(active.canReuseTunnelFor(newLink))
+        assertNotEquals(active, retry)
+        assertEquals(active.configuration(), retry.configuration())
     }
 
     @Test fun invalidTunDescriptorNeverReachesNativeDriver() {

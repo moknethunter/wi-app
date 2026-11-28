@@ -9,7 +9,15 @@ internal const val OVERLAY_PREFIX = 22
 internal const val OVERLAY_HOST = "10.126.124.1"
 internal const val OVERLAY_INSTANCE = "wikall"
 
-internal data class OverlayRequest(val pin: String, val secret: String, val number: String, val peer: String?, val extraPeers: List<String> = emptyList(), val listenerAddresses: List<String> = emptyList()) {
+internal data class OverlayRequest(
+    val pin: String,
+    val secret: String,
+    val number: String,
+    val peer: String?,
+    val extraPeers: List<String> = emptyList(),
+    val listenerAddresses: List<String> = emptyList(),
+    val transportRevision: Long = 0,
+) {
     init {
         require(pin.length == 64 && pin.all { it in '0'..'9' || it in 'A'..'F' })
         require(validNonce(secret))
@@ -20,6 +28,10 @@ internal data class OverlayRequest(val pin: String, val secret: String, val numb
     // Transitional seed: EasyTier v2.6.4 does not assign DHCP addresses without peers.
     // Only the directory owner seeds the current realm. Clients never derive IP from number.
     val seedAddress: String? get() = OVERLAY_HOST.takeIf { number == HOST_NUMBER }
+
+    fun canReuseTunnelFor(next: OverlayRequest): Boolean =
+        pin == next.pin && number == next.number && secret == next.secret &&
+            transportRevision == next.transportRevision && listenerAddresses == next.listenerAddresses
 
     // The configuration carries a realm secret. Never expose it via generated data-class toString.
     override fun toString(): String = "OverlayRequest(redacted)"

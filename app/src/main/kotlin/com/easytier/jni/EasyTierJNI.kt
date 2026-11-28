@@ -1,5 +1,7 @@
 package com.easytier.jni
 
+import com.mokasas.wikall.OverlaySocketPolicy
+
 /** Native exports verified against EasyTier v2.6.4. */
 internal object EasyTierJNI {
     init {
@@ -9,6 +11,7 @@ internal object EasyTierJNI {
 
     @JvmStatic external fun parseConfig(config: String): Int
     @JvmStatic external fun runNetworkInstance(config: String): Int
+    @JvmStatic external fun setSocketPolicy(policy: OverlaySocketPolicy?): Int
     @JvmStatic external fun setTunFd(instanceName: String, fd: Int): Int
     @JvmStatic external fun retainNetworkInstance(instanceNames: Array<String>?): Int
     @JvmStatic external fun collectNetworkInfos(): String?
